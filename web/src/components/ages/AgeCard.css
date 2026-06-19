@@ -1,0 +1,65 @@
+.age-card {
+  cursor: default;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  transition: border-color 200ms ease;
+}
+.age-card[role="button"] { cursor: pointer; }
+.age-card[role="button"]:hover { border-color: var(--card-border-strong); }
+
+.age-card--good { border-color: rgba(107,227,164,0.2); }
+.age-card--warn { border-color: rgba(242,192,99,0.2); }
+.age-card--bad  { border-color: rgba(255,107,107,0.2); }
+
+.age-card__head { display: flex; justify-content: space-between; align-items: center; }
+
+.age-card__body { display: flex; align-items: center; gap: 24px; }
+
+.age-card__ring { position: relative; flex-shrink: 0; }
+
+.age-card__ring-center {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+}
+.age-card__age {
+  font-family: var(--font-display); font-weight: 500;
+  font-size: 36px; line-height: 1; letter-spacing: -0.03em; color: var(--text-1);
+}
+.age-card__age-label { font-family: var(--font-mono); font-size: 11px; color: var(--text-3); }
+.age-card__no-data { font-family: var(--font-mono); font-size: 20px; color: var(--text-4); }
+
+.age-card__info { flex: 1; display: flex; flex-direction: column; gap: 6px; }
+
+.age-card__actual { display: flex; justify-content: space-between; align-items: baseline; }
+.age-card__actual-label { font-family: var(--font-mono); font-size: 11px; color: var(--text-3); letter-spacing: 0.1em; }
+.age-card__actual-val { font-family: var(--font-display); font-size: 20px; color: var(--text-2); }
+
+.age-card__delta {
+  font-family: var(--font-display); font-weight: 500; font-size: 22px; letter-spacing: -0.02em;
+}
+.age-card__delta--good { color: var(--good); }
+.age-card__delta--bad  { color: var(--bad); }
+.age-card__delta--neutral { color: var(--text-2); }
+
+.age-card__subtitle { font-family: var(--font-mono); font-size: 11px; color: var(--text-4); letter-spacing: 0.08em; margin-top: 2px; }
+
+/* Drivers */
+.age-card__drivers { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--card-border); padding-top: 14px; }
+
+.age-driver { display: grid; grid-template-columns: 110px 1fr 50px; align-items: center; gap: 10px; }
+.age-driver__name { font-family: var(--font-mono); font-size: 11px; color: var(--text-3); letter-spacing: 0.06em; }
+.age-driver__bar-wrap { height: 4px; background: rgba(255,255,255,0.05); border-radius: 999px; overflow: hidden; }
+.age-driver__bar { height: 100%; border-radius: 999px; transition: width 600ms ease; }
+.age-driver__bar--helping { background: var(--good); }
+.age-driver__bar--hurting { background: var(--bad); }
+.age-driver__bar--neutral { background: var(--text-4); }
+.age-driver__dir { font-family: var(--font-mono); font-size: 11px; text-align: right; }
+.age-driver__dir--helping { color: var(--good); }
+.age-driver__dir--hurting { color: var(--bad); }
+.age-driver__dir--neutral { color: var(--text-4); }
+
+.age-card__empty { font-family: var(--font-mono); font-size: 11px; color: var(--text-4); text-align: center; padding: 8px 0; }
+.age-card__cta { font-family: var(--font-mono); font-size: 11px; color: var(--text-3); text-align: right; margin-top: auto; }
+.age-card:hover .age-card__cta { color: var(--text-1); }

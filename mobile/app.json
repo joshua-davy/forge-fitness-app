@@ -1,0 +1,28 @@
+{
+  "expo": {
+    "name": "Forge",
+    "slug": "forge",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "scheme": "forge",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "app.forge.client"
+    },
+    "android": {
+      "package": "app.forge.client",
+      "adaptiveIcon": {
+        "backgroundColor": "#050506"
+      }
+    },
+    "plugins": ["expo-router"],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "apiUrl": "http://localhost:8000"
+    }
+  }
+}

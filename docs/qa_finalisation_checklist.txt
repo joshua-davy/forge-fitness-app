@@ -1,0 +1,40 @@
+Forge QA and finalisation checklist
+Generated: 2026-05-31
+
+What is working well
+- The main browser app now has a coherent premium dashboard structure: Home, Fitness, Biology, Sleep, Focus, and Profile.
+- Profile data is persisted server-side in user_profiles and reused by dashboard, coach, and age endpoints.
+- Profile editing supports name, date of birth, height, weight, body fat, and muscle mass. Body values save into the daily health snapshot so they can trend.
+- Fitness Age uses the saved profile age and latest-known sparse Garmin fields such as VO2 Max and HR Recovery.
+- Focus now includes priority focus, small improvements, strong points, past focus signals, correlation explanation, and a trend watchlist.
+- The metric drilldown overlay is restored and metric cards can open detailed trend charts.
+- Backend deterministic insight generation is context-aware for higher-is-better, lower-is-better, and target-range metrics.
+
+QA checks completed
+- Frontend production build: passed.
+- Backend pytest suite: 21 passed.
+- GET /api/profile: returned saved profile for Joshua Davy, DOB 1999-04-03, age 27.2, height 185 cm.
+- GET /api/dashboard/today: returned the same saved profile and matching age values.
+- GET /api/fitness-age: returned the same actual age as dashboard and matching Fitness Age calculation after sparse-field enrichment.
+- GET /api/insights?range=90d: returned flags, insights, and behaviour patterns.
+- GET /api/coach/today: returned structured observations/actions, but still needs copy refinement.
+
+Known issues to fix before calling Forge final
+- The in-app browser automation could not open 127.0.0.1:5173 in this QA pass because the browser reported ERR_BLOCKED_BY_CLIENT. Manual browser click-through should still be done.
+- Today can be partially empty before Garmin has produced full-day sleep/recovery data. The UI should make this clearer by saying "latest complete day" or by defaulting overview metrics to the last complete Garmin day.
+- Recovery currently appears as null/0 on 2026-05-31 while historical insight flags reference 2026-05-21. The app needs a clearer current-day versus latest-complete-day policy.
+- Biological Age is null for the current active date if today's physiology inputs are incomplete, even though historical Biological Age exists. Use latest complete Biological Age with a date label, or show an explicit "waiting for today's inputs" state.
+- Coach can still over-prioritise goals when no goals exist. It should lead with health state first, then goals second.
+- Coach context should use the same latest-known sparse value strategy as dashboard for stress, HRV, RHR, sleep, and body battery.
+- The bundle is large at about 750 KB after minification. Code splitting is a final polish task.
+- There is no real multi-user auth yet. Current profile persistence is local single-user.
+- Netlify deployment needs a hosted backend, managed database, CORS origin setup, and server-side Garmin credential/session storage.
+
+Recommended finalisation order
+1. Decide active-day policy: today only, or latest complete day for sleep/recovery with clear date labels.
+2. Apply latest-complete-day fallback consistently to dashboard, coach, Fitness Age, Biological Age, and rings.
+3. Add profile/session smoke tests for PUT /api/profile and age recomputation.
+4. Refine coach ranking so critical health signals beat empty-goal prompts.
+5. Add user-facing data freshness and last-complete-day copy.
+6. Manual browser QA: Home, metric drilldown, Focus trend watchlist, Profile edit/save, export image.
+7. Production hardening: hosted backend, Postgres, auth, encrypted Garmin sessions, Netlify frontend env vars.

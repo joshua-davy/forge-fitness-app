@@ -1,0 +1,228 @@
+:root {
+  /* Backgrounds */
+  --bg-0: #050506;
+  --bg-1: #08090c;
+  --bg-2: #0c0d11;
+  --card: rgba(255, 255, 255, 0.035);
+  --card-strong: rgba(255, 255, 255, 0.055);
+  --card-border: rgba(255, 255, 255, 0.07);
+  --card-border-strong: rgba(255, 255, 255, 0.12);
+
+  /* Text */
+  --text-1: #fafafa;
+  --text-2: #b8b6b0;
+  --text-3: #76746e;
+  --text-4: #4a4944;
+
+  /* Semantic */
+  --good: #6be3a4;
+  --warn: #f2c063;
+  --bad: #ff6b6b;
+  --sleep: #8f7cff;
+  --hrv: #62e6d0;
+  --strain: #ff9b5f;
+  --below: #5dadec;
+
+  /* Rings */
+  --ring-recovery: #6be3a4;
+  --ring-readiness: #62e6d0;
+  --ring-strain: #ff9b5f;
+
+  /* Day-progress gradient stops */
+  --sun-morning: #ffd27d;
+  --sun-midday: #ffe07a;
+  --sun-afternoon: #ffb066;
+  --sun-evening: #ff7a59;
+  --sun-twilight: #8f7cff;
+  --sun-night: #4759a9;
+
+  /* Layout */
+  --radius-sm: 10px;
+  --radius-md: 16px;
+  --radius-lg: 22px;
+  --radius-xl: 28px;
+  --gap-sm: 10px;
+  --gap-md: 16px;
+  --gap-lg: 22px;
+  --gap-xl: 32px;
+
+  /* Typography */
+  --font-display: "Fraunces", "Times New Roman", serif;
+  --font-body: "Inter Tight", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+
+  --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.03) inset,
+                 0 12px 28px -16px rgba(0, 0, 0, 0.6);
+  --shadow-glow: 0 0 60px -20px rgba(107, 227, 164, 0.18);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #root {
+  height: 100%;
+  background: var(--bg-0);
+}
+
+body {
+  font-family: var(--font-body);
+  font-size: 16px;
+  color: var(--text-1);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "cv11", "ss01", "ss03";
+  letter-spacing: -0.005em;
+  background:
+    radial-gradient(1200px 600px at 20% -10%, rgba(143, 124, 255, 0.06), transparent 60%),
+    radial-gradient(900px 600px at 100% 0%, rgba(98, 230, 208, 0.045), transparent 60%),
+    radial-gradient(800px 600px at 50% 100%, rgba(255, 155, 95, 0.035), transparent 60%),
+    var(--bg-0);
+  background-attachment: fixed;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+button {
+  font-family: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+input, textarea {
+  font-family: inherit;
+  color: inherit;
+  background: transparent;
+  border: none;
+  outline: none;
+}
+
+input:focus, textarea:focus { outline: none; }
+
+::selection {
+  background: rgba(107, 227, 164, 0.25);
+  color: var(--text-1);
+}
+
+/* ---------- Reusable card ---------- */
+
+.card {
+  position: relative;
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-lg);
+  padding: var(--gap-lg);
+  backdrop-filter: blur(12px) saturate(1.2);
+  -webkit-backdrop-filter: blur(12px) saturate(1.2);
+  box-shadow: var(--shadow-card);
+  transition: border-color 240ms ease, background 240ms ease;
+}
+
+.card--strong { background: var(--card-strong); }
+.card:hover { border-color: var(--card-border-strong); }
+
+.card__label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-bottom: 14px;
+}
+
+/* ---------- Layout ---------- */
+
+.app {
+  max-width: 1480px;
+  margin: 0 auto;
+  padding: clamp(20px, 3vw, 40px) clamp(16px, 3vw, 36px) 120px;
+}
+
+.row {
+  display: flex;
+  gap: var(--gap-md);
+  align-items: center;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-md);
+}
+
+/* ---------- Grid ---------- */
+
+.grid {
+  display: grid;
+  gap: var(--gap-md);
+}
+
+.grid--health {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.grid--cmd {
+  grid-template-columns: 320px 1fr 1fr;
+}
+
+@media (max-width: 1100px) {
+  .grid--cmd { grid-template-columns: 1fr 1fr; }
+}
+
+@media (max-width: 720px) {
+  .grid--cmd { grid-template-columns: 1fr; }
+}
+
+/* ---------- Typography helpers ---------- */
+
+.title {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: clamp(26px, 3.4vw, 38px);
+  letter-spacing: -0.02em;
+  line-height: 1.05;
+  background: linear-gradient(180deg, #ffffff 0%, #9b9994 120%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.meta {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: var(--text-3);
+}
+
+/* ---------- Pill ---------- */
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--text-2);
+}
+
+.pill--good { color: var(--good); border-color: rgba(107, 227, 164, 0.25); background: rgba(107, 227, 164, 0.08); }
+.pill--warn { color: var(--warn); border-color: rgba(242, 192, 99, 0.25); background: rgba(242, 192, 99, 0.07); }
+.pill--bad { color: var(--bad); border-color: rgba(255, 107, 107, 0.25); background: rgba(255, 107, 107, 0.07); }

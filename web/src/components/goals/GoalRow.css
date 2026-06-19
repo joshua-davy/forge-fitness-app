@@ -1,0 +1,134 @@
+.row-goal {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.018);
+  border: 1px solid rgba(255, 255, 255, 0.045);
+  transition: background 200ms ease, border-color 200ms ease;
+  list-style: none;
+}
+
+.row-goal:hover {
+  background: rgba(255, 255, 255, 0.035);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+/* Done state */
+.row-goal--done {
+  opacity: 0.55;
+  background: rgba(107, 227, 164, 0.025);
+  border-color: rgba(107, 227, 164, 0.14);
+}
+.row-goal--done .row-goal__text {
+  text-decoration: line-through;
+  color: var(--good);
+}
+
+/* Queued state */
+.row-goal--queued {
+  background: rgba(242, 192, 99, 0.04);
+  border-color: rgba(242, 192, 99, 0.18);
+  border-left: 3px solid var(--warn);
+  padding-left: 9px;
+}
+.row-goal--queued .row-goal__queue { color: var(--warn); }
+
+.row-goal__handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 24px;
+  color: var(--text-4);
+  cursor: grab;
+  transition: color 160ms ease;
+}
+.row-goal__handle:hover { color: var(--text-2); }
+.row-goal__handle:active { cursor: grabbing; }
+
+.row-goal__check {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  background: transparent;
+  border: 1.5px solid rgba(255, 255, 255, 0.18);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--bg-0);
+  flex-shrink: 0;
+  transition: all 180ms ease;
+}
+
+.row-goal__check:hover {
+  border-color: rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.row-goal__check--on {
+  background: var(--good);
+  border-color: var(--good);
+  box-shadow: 0 0 16px rgba(107, 227, 164, 0.35);
+}
+
+.row-goal__main {
+  flex: 1;
+  min-width: 0;
+}
+
+.row-goal__text {
+  font-size: 14px;
+  color: var(--text-1);
+  line-height: 1.35;
+  cursor: text;
+  display: block;
+  word-break: break-word;
+}
+
+.row-goal__input {
+  width: 100%;
+  font-size: 14px;
+  color: var(--text-1);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+
+.row-goal__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0.4;
+  transition: opacity 160ms ease;
+}
+
+.row-goal:hover .row-goal__actions { opacity: 1; }
+
+.row-goal__queue,
+.row-goal__delete {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  color: var(--text-3);
+  transition: all 160ms ease;
+}
+
+.row-goal__queue:hover {
+  color: var(--warn);
+  background: rgba(242, 192, 99, 0.08);
+}
+
+.row-goal__queue--on {
+  color: var(--warn);
+}
+
+.row-goal__delete:hover {
+  color: var(--bad);
+  background: rgba(255, 107, 107, 0.08);
+}

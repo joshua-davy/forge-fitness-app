@@ -1,0 +1,43 @@
+"""Forge backend."""
+from __future__ import annotations
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from app.api.routes import auth, dashboard, garmin, goals
+from app.core.config import get_settings
+from app.db.session import init_db
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    init_db()
+    yield
+
+
+def create_app() -> FastAPI:
+    s = get_settings()
+    app = FastAPI(title="Forge API", version="0.2.0", lifespan=lifespan)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=s.cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    app.include_router(auth.router)
+    app.include_router(goals.router)
+    app.include_router(dashboard.router)
+    app.include_router(garmin.router)
+
+    @app.get("/")
+    def root():
+        return {"app": s.app_name, "env": s.env, "status": "ok"}
+
+    @app.get("/healthz")
+    def healthz():
+        return {"ok": True}
+
+    return app
+
+
+app = create_app()

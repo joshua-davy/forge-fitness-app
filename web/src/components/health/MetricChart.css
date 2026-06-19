@@ -1,0 +1,45 @@
+.mchart { display: flex; flex-direction: column; gap: 14px; }
+.mchart__head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+.mchart__label { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.14em; color: var(--text-2); text-transform: uppercase; }
+.mchart__coverage { margin-top: 5px; font-family: var(--font-mono); font-size: 11px; color: var(--text-4); }
+.mchart__coverage--low { color: var(--warn); }
+.mchart__ranges { display: flex; gap: 4px; }
+.mchart__range { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; padding: 5px 9px; border-radius: 8px; color: var(--text-3); background: transparent; border: 1px solid transparent; transition: all 160ms ease; }
+.mchart__range:hover { color: var(--text-1); }
+.mchart__range--on { color: var(--text-1); background: rgba(255,255,255,0.06); border-color: rgba(255,255,255,0.1); }
+.mchart__stats { display: flex; gap: 16px; flex-wrap: wrap; }
+.mchart__stats span { font-family: var(--font-mono); font-size: 12px; color: var(--text-3); }
+.mchart__stats strong { color: var(--text-1); }
+.mchart__up strong { color: var(--good); }
+.mchart__down strong { color: var(--bad); }
+.mchart__area { min-height: 230px; display: flex; align-items: center; justify-content: center; }
+.mchart__loader, .mchart__empty { font-family: var(--font-mono); font-size: 12px; color: var(--text-4); }
+.mchart__error { font-family: var(--font-mono); font-size: 12px; color: var(--bad); }
+.mchart__intel { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+.mchart__panel { border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; padding: 12px; background: rgba(255,255,255,0.025); display: flex; flex-direction: column; gap: 8px; }
+.mchart__panel-title { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.18em; color: var(--text-4); text-transform: uppercase; }
+.mchart__flag, .mchart__insight { display: flex; flex-direction: column; gap: 4px; font-size: 14px; line-height: 1.42; color: var(--text-2); }
+.mchart__flag strong, .mchart__insight strong { color: var(--text-1); font-weight: 600; }
+.mchart__flag { padding-left: 10px; border-left: 3px solid var(--text-4); }
+.mchart__flag--watch { border-left-color: var(--warn); }
+.mchart__flag--alert { border-left-color: var(--bad); }
+.mchart__chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.mchart__chip { font-family: var(--font-mono); font-size: 11px; color: var(--text-2); padding: 5px 8px; border-radius: 999px; background: rgba(255,255,255,0.055); border: 1px solid rgba(255,255,255,0.08); text-transform: capitalize; }
+.mchart__explain {
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 14px;
+  padding: 12px 14px;
+  background: rgba(255,255,255,0.025);
+  color: var(--text-2);
+  font-size: 14px;
+  line-height: 1.45;
+}
+.mchart__explain summary {
+  cursor: pointer;
+  color: var(--text-1);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}

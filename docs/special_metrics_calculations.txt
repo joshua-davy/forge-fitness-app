@@ -1,0 +1,169 @@
+Forge special metric calculations
+Generated for Forge v3.
+
+Principle
+Forge separates deterministic calculations from coaching language. These metrics are calculated from stored Garmin-derived daily health snapshots first. The AI coach may explain them, but it must not invent the numbers.
+
+1. Sleep Regularity Index
+Question answered: How stable is my sleep schedule?
+Inputs: sleep_start_local, sleep_end_local.
+Method:
+- Parse bedtime and wake time for each night.
+- Compare each night against the previous night.
+- Convert bedtime shift and wake-time shift into minutes, correcting for the midnight wraparound.
+- Average all shifts.
+- Score = 100 - (average_shift_minutes / 90 * 100), clamped to 0-100.
+Interpretation:
+- Higher is better.
+- 75+ is good.
+- 55-74 is watch.
+- Below 55 suggests irregular timing.
+Limitations:
+- Requires at least 5 nights with sleep timing.
+- It measures schedule stability, not sleep quality directly.
+
+2. Social Jetlag
+Question answered: Do my weekend sleep timings drift away from weekday rhythm?
+Inputs: sleep_start_local, sleep_end_local.
+Method:
+- Calculate midsleep time for each night: bedtime + half of sleep window.
+- Split nights into weekday and weekend.
+- Calculate weekday midsleep average and weekend midsleep average.
+- Social jetlag = absolute circular time difference between those averages.
+- Score = 100 - (social_jetlag_hours / 2.5 * 100), clamped to 0-100.
+Interpretation:
+- Lower hours are better.
+- 0-0.7h is good.
+- Around 1-1.5h is watch.
+- Above 1.5h suggests meaningful circadian drift.
+Limitations:
+- Requires enough weekday and weekend sleep timing.
+- It does not judge whether a late schedule is bad; it measures inconsistency.
+
+3. Recovery Half-Life
+Question answered: How long do I usually take to recover after high-strain days?
+Inputs: strain, recovery.
+Method:
+- Find top-quartile strain days in the selected history window.
+- Calculate baseline recovery across the same window.
+- For each high-strain day, look at the following 1-4 days.
+- Recovery half-life is the average number of days until recovery returns to baseline.
+- Score = 100 - ((lag_days - 1) / 3 * 100), clamped to 0-100.
+Interpretation:
+- Lower days are better.
+- Around 1 day is strong recovery.
+- 2-3 days means hard sessions need spacing.
+- 4+ days suggests high load cost or poor recovery support.
+Limitations:
+- Requires enough strain and recovery history.
+- This is a practical wearable estimate, not a clinical recovery marker.
+
+4. HRV-Guided Training Gate
+Question answered: What level of training fits today's physiology?
+Inputs: recovery, readiness, HRV, HRV baseline, RHR, RHR baseline, sleep debt, stress.
+Method:
+- Start from 50 points.
+- Add or subtract points from recovery and readiness versus 55.
+- Adjust by HRV as a percentage of baseline.
+- Penalise RHR above baseline.
+- Penalise sleep debt.
+- Penalise stress above 35.
+- Clamp final score to 0-100.
+Output bands:
+- 75+: Intensity available.
+- 58-74: Moderate available.
+- 40-57: Easy aerobic.
+- Below 40: Rest only.
+Limitations:
+- This is a training decision aid, not medical advice.
+- Missing inputs reduce confidence; they do not trigger fabricated replacements.
+
+5. Physiological Anomaly Load / Physiological Stability
+Question answered: Are today's physiology signals unusual compared with my own baseline?
+Inputs: HRV, RHR, stress, respiration, SpO2, body battery.
+Method:
+- Compare today's value against the previous values in the selected window.
+- Convert each signal to a z-score.
+- Bad directions are:
+  HRV lower than baseline.
+  RHR higher than baseline.
+  Stress higher than baseline.
+  Respiration higher than baseline.
+  SpO2 lower than baseline.
+  Body battery lower than baseline.
+- Sum only bad-direction z-scores, capped per signal.
+- Stability score = 100 - (anomaly_load / 9 * 100), clamped to 0-100.
+Interpretation:
+- Higher score is better.
+- 75+ means stable.
+- 55-74 means watch.
+- Below 55 means notable deviation from baseline.
+Limitations:
+- Requires at least 14 days to build a useful baseline.
+- A flagged anomaly is not a diagnosis; it is a prompt to inspect context.
+
+6. Sleep Architecture Confidence
+Question answered: Can I trust the sleep-stage breakdown enough to interpret it?
+Inputs: total sleep, deep sleep, REM sleep, light sleep, awake time.
+Method:
+- Count how many of the four stage fields are present: deep, REM, light, awake.
+- Compare stage total with the reported sleep window.
+- Score combines field completeness and internal consistency.
+Interpretation:
+- Higher score means sleep-stage insights are safer to interpret.
+- Low score means the sleep score may be valid, but stage-level explanations are partial.
+Limitations:
+- This is a data-quality metric, not a health score.
+
+7. Respiratory Stability During Sleep
+Question answered: Is breathing stable relative to my recent baseline?
+Inputs: respiration_avg, respiration_sleep when available, SpO2.
+Method:
+- Compare current respiration against recent respiration baseline.
+- Penalise large drift from baseline.
+- Penalise SpO2 below 95%.
+- Score = 100 - respiration drift penalty - oxygen penalty, clamped to 0-100.
+Interpretation:
+- Higher is better.
+- Stable respiration inside personal range is preferred.
+- Higher breathing variability is not celebrated; it is usually a watch signal.
+Limitations:
+- Daily Garmin respiration is not a sleep-lab respiratory assessment.
+
+8. Training Monotony
+Question answered: Is my training load too similar day after day?
+Inputs: cardio_load.
+Method:
+- Use the latest 7 days of cardio load.
+- Monotony = 7-day average load / 7-day standard deviation.
+- Monotony-adjusted strain = monotony * 7-day total load.
+- Score = 100 - ((monotony - 1) / 1.5 * 100), clamped to 0-100.
+Interpretation:
+- Moderate variation is usually better than identical load every day.
+- High monotony with high total load can increase overreaching risk.
+Limitations:
+- The current cardio_load is a daily estimate until workout-level TRIMP is fully persisted.
+
+9. Resilience Ratio
+Question answered: Does my recovery hold up after strain?
+Inputs: strain, next-day recovery.
+Method:
+- Pair each day's strain with the following day's recovery.
+- Compute the correlation between strain and next-day recovery.
+- Score = 65 + correlation * 35, clamped to 0-100.
+Interpretation:
+- Higher is better.
+- A negative relationship means hard days tend to cost next-day recovery.
+- A flat or positive relationship means recovery is holding up better under load.
+Limitations:
+- Correlation is descriptive, not causal.
+- Requires at least 12 day-pairs.
+
+Removed candidates
+Aerobic Decoupling, Durability Score, and DFA alpha-1 Threshold are intentionally not shown in the app right now.
+Reason:
+- Forge does not yet persist workout-level heart-rate streams, pace, power, lap splits, or raw RR intervals.
+- Showing those metrics without those inputs would make the dashboard look more advanced while reducing trust.
+Future path:
+- Re-introduce Aerobic Decoupling and Durability only after workout samples are stored.
+- Re-introduce DFA alpha-1 only if high-quality RR interval data is available and the metric is clearly marked experimental.

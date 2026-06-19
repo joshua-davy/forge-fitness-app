@@ -1,0 +1,32 @@
+app = "forge-backend"
+primary_region = "lhr"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  FORGE_ENV = "production"
+  PORT = "8000"
+  # DATABASE_URL set as a secret: `fly secrets set DATABASE_URL=postgresql+psycopg://...`
+  # OPENAI_API_KEY set as a secret too.
+  # CORS_ORIGINS should include your web URL.
+
+[[mounts]]
+  source = "forge_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 200
+    hard_limit = 250
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

@@ -1,0 +1,19 @@
+app = "forge-web"
+primary_region = "lhr"
+
+[build]
+  dockerfile = "Dockerfile"
+  [build.args]
+    # Override at deploy time: `fly deploy --build-arg VITE_API_URL=https://forge-backend.fly.dev`
+    VITE_API_URL = "https://forge-backend.fly.dev"
+
+[http_service]
+  internal_port = 80
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

@@ -1,0 +1,96 @@
+.dayring {
+  display: flex;
+  align-items: center;
+  gap: 26px;
+  flex-wrap: wrap;
+}
+
+.dayring__visual {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.dayring__svg {
+  display: block;
+}
+
+.dayring__center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  pointer-events: none;
+}
+
+.dayring__pct {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 36px;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  color: var(--text-1);
+}
+
+.dayring__pct-sym {
+  font-size: 16px;
+  color: var(--text-3);
+  margin-left: 2px;
+}
+
+.dayring__phase {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  color: var(--text-2);
+  margin-top: 4px;
+}
+
+.dayring__clock {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+  margin-top: 1px;
+}
+
+.dayring__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+.dayring__status {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 20px;
+  letter-spacing: -0.015em;
+  color: var(--text-1);
+  line-height: 1.2;
+}
+
+.dayring__remaining {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--text-2);
+}
+
+.dayring__window {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-3);
+  letter-spacing: 0.04em;
+  margin-top: 4px;
+}
+
+.dayring__window-sep {
+  color: var(--text-4);
+}

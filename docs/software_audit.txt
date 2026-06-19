@@ -1,0 +1,99 @@
+Forge v3 software audit
+Date: 2026-05-21
+
+Scope
+This audit covers the current forge-app-v3 backend and web dashboard after the latest special-metrics pass.
+
+1. Product state
+Forge is now a browser-first health intelligence dashboard with:
+- FastAPI backend on port 8001.
+- Vite React frontend on port 5173.
+- Garmin sync through saved Garmin/garth session configuration.
+- Daily dashboard with Home, Fitness, Biology, and Sleep sections.
+- Drill-down popups for metric charts.
+- Coach cards on each major section.
+- Manual body-composition entry for weight, body fat, and muscle mass.
+- Floating bottom navigation.
+- Day navigation for previous/current days.
+
+2. Backend strengths
+- HealthSnapshot model covers most daily Garmin-derived fields: sleep, HRV, RHR, stress, respiration, SpO2, body battery, steps, activity minutes, VO2 max, HR recovery, cardio load, load balance, body composition, fitness age, and biological age.
+- Dashboard API returns current day metrics, age metrics, goal state, and special metrics.
+- Metric drill-down API supports range keys: 7d, 30d, 90d, 6m, 1y, all.
+- Insight engine understands metric direction, so lower-is-better metrics like RHR, stress, breathing rate, sleep debt, biological age, and fitness age are not treated like steps.
+- Coach service now has better context for latest sparse fields such as VO2 max, HR recovery, weight, body fat, muscle mass, and BMI.
+- Garmin status route reports configuration state and last sync freshness.
+
+3. Backend gaps
+- The app still uses a single-user local configuration model rather than real user accounts.
+- Garmin sync depends on a locally saved session. Long-term productisation needs OAuth-like account linking or a secure credential/session workflow.
+- Workout-level time-series are not fully persisted yet. This blocks true aerobic decoupling, durability, sport-specific VO2, sport half-life, power/pace efficiency, and DFA alpha-1.
+- Cardio load is still an approximation from daily activity totals rather than true workout TRIMP from heart-rate zones.
+- Stress is only as good as Garmin's daily summary availability; intraday stress timeline is not yet persisted.
+- Sleep architecture uses Garmin stages but does not yet expose a full contributor breakdown on the sleep card itself.
+- Biological age exists as a wearable-derived estimate, not a clinical biological-age model. The UI should keep that distinction visible.
+
+4. Frontend strengths
+- The current v3 aesthetic is strong: dark premium cards, floating bottom nav, large age cards, range-marker health cards, and section-specific coach cards.
+- Metric popups have been preserved instead of forcing full-page navigation.
+- Home is now closer to an overview: age markers, health ranges, coach, signals, and patterns.
+- Fitness, Biology, and Sleep are separated into clearer pages.
+- Range cards correctly support higher-is-better, lower-is-better, target-range, and normal-range contexts.
+- Manual body composition can be entered from the Biology section.
+
+5. Frontend gaps
+- Drill-down popups are useful but can still feel spatially awkward because users may need to scroll back to the graph after changing context. A future improvement would be a sticky graph header inside the popup or a right-side metric rail on desktop.
+- Some strings still have mojibake characters from previous encoding issues, for example garbled checkmarks and arrows. These should be cleaned in a dedicated text pass.
+- Coach cards are section-specific, but the underlying coach API is still a current-day summary rather than a persistent per-section coaching history.
+- The UI does not yet have a full explanation modal for every metric, though the special-metrics calculation file now documents the formulas.
+- The frontend is React/Vite web, not the earlier Expo/Skia architecture. This is currently acceptable because the user is testing in browser, but a mobile app build would need a separate pass.
+
+6. Data integrity risks
+- Missing Garmin values must remain null, not zero. This principle has been partially enforced but should be audited after every new Garmin field mapping.
+- Sparse metrics such as VO2 max, HR recovery, body fat, and muscle mass need latest-known-value handling in dashboard views but should not be plotted as daily readings unless they were actually observed.
+- Fitness age and biological age depend on accurate actual age. Current backend settings should reflect DOB 1999-04-03 for the user.
+- Any future AI-generated coach text must cite deterministic inputs and avoid causal claims unless pattern analysis supports them.
+
+7. New special metrics added
+- Sleep Regularity Index.
+- Social Jetlag.
+- Recovery Half-Life.
+- HRV-Guided Training Gate.
+- Physiological Anomaly Load / Physiological Stability.
+- Sleep Architecture Confidence.
+- Respiratory Stability During Sleep.
+- Training Monotony.
+- Resilience Ratio.
+- Aerobic Decoupling, Durability Score, and DFA alpha-1 were removed from the active UI/API payload until workout-level streams are persisted.
+
+8. Recommended next work
+Priority 1:
+- Run a Garmin mapping audit for VO2 max, HR recovery, stress, and sleep stages with real payload examples.
+- Persist workout activities and workout detail samples: HR, pace, power, cadence, elevation, lap splits, sport type, start time, and duration.
+- Add a metric explanation drawer in the UI that reads from a backend metric-definition registry.
+
+Priority 2:
+- Add a sticky drill-down graph header and a compact metric selector inside the popup.
+- Add daily review history and coach history by date.
+- Add a pattern tab or pattern drawer with deterministic evidence for sleep timing, strain recovery lag, stress recovery, and sport discipline freshness.
+
+Priority 3:
+- Prepare multi-user architecture: users table, encrypted Garmin session table, per-user health snapshots, login sessions, and data-isolation tests.
+- Add Apple Health import via file/import first, then HealthKit if moving to native mobile.
+- Add deployment plan for hosted backend, managed Postgres, scheduled sync worker, and Netlify frontend.
+
+9. Verification checklist
+Backend:
+- Run pytest from backend.
+- Confirm /api/dashboard/today returns special_metrics.
+- Confirm /api/special-metrics?range=90d returns scored and data-limited metrics.
+
+Frontend:
+- Run npm run build from web.
+- Confirm Home shows Physiology Stability and Training Gate.
+- Confirm Fitness shows Training Gate, Resilience Ratio, Training Monotony, and data-limited workout-stream cards.
+- Confirm Biology shows Physiology Stability and Respiratory Stability.
+- Confirm Sleep shows Sleep Regularity, Social Jetlag, Sleep Architecture, and Respiratory Stability.
+
+10. Current product judgement
+Forge v3 is moving from a dashboard prototype toward a real health intelligence cockpit. The aesthetic is now close to the intended direction. The next decisive leap is not more cards; it is better persisted workout-level data and stronger metric explanation surfaces.

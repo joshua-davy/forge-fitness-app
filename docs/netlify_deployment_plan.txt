@@ -1,0 +1,62 @@
+Forge Netlify deployment plan
+Date: 2026-05-22
+
+Short answer
+Netlify is a good fit for the Vite frontend. It is not enough by itself for the current FastAPI + SQLite/Garmin sync backend. For a usable hosted app, deploy:
+- Frontend: Netlify.
+- Backend API: Render, Railway, Fly.io, Heroku-style dyno, or another always-on Python host.
+- Database: managed Postgres.
+- Background sync: backend scheduled worker or hosted cron hitting a sync endpoint.
+
+Frontend on Netlify
+1. Set the Netlify base directory to:
+   web
+2. Build command:
+   npm run build
+3. Publish directory:
+   web/dist
+4. Add environment variable:
+   VITE_API_URL=https://your-forge-api.example.com
+5. Redeploy after changing environment variables.
+
+Backend requirements
+1. Move production database from SQLite to Postgres.
+2. Set DATABASE_URL on the backend host.
+3. Set CORS_ORIGINS to include the Netlify site:
+   https://your-site.netlify.app
+   https://your-custom-domain.com
+4. Keep Garmin credentials or saved Garmin sessions server-side only.
+5. Do not expose GARMIN_EMAIL, GARMIN_PASSWORD, OPENAI_API_KEY, or database credentials to the Netlify frontend.
+
+Netlify functions option
+Netlify Functions can proxy small API calls, but they are not ideal for this backend as-is because:
+- Garmin sync can be long-running.
+- Health history writes need a persistent database.
+- Python FastAPI is already built as an always-on API.
+- Background jobs and session storage are cleaner in a dedicated backend.
+
+Recommended production architecture
+Browser on Netlify
+-> VITE_API_URL points to FastAPI backend
+-> FastAPI talks to Postgres
+-> FastAPI stores encrypted Garmin sessions per user
+-> scheduled worker runs delta sync
+-> frontend reads fresh metrics from API
+
+Required code changes before real public deployment
+1. Replace local single-user profile with users table.
+2. Add login/session auth.
+3. Add encrypted per-user Garmin credentials/session tokens.
+4. Add user_id to all health snapshots, coach summaries, goals, and sync records.
+5. Add Postgres migrations.
+6. Add proper background sync jobs.
+7. Add privacy/export controls.
+8. Add production CORS and HTTPS-only cookies.
+9. Add rate limits and API error telemetry.
+10. Add backup/restore for user health history.
+
+Official Netlify docs checked
+- Vite setup: https://docs.netlify.com/build/frameworks/framework-setup-guides/vite/
+- Build environment variables: https://docs.netlify.com/build/environment-variables/overview/
+- Framework environment variables: https://docs.netlify.com/frameworks/environment-variables/
+- Functions environment variables: https://docs.netlify.com/functions/environment-variables/

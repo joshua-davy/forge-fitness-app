@@ -1,0 +1,67 @@
+Forge dashboard review against professional health apps
+Date: 2026-05-21
+
+Reference apps reviewed
+- WHOOP: recovery, strain, stress, sleep need, sleep schedule, behaviour guidance, personal baselines.
+- Oura: readiness, sleep, resilience, daytime stress, medium-term recovery/stress balance.
+- Garmin: training readiness, HRV status, sleep score, acute load, stress history, Body Battery.
+- Bevel: recovery, sleep, strain, stress, cardio load, cardio focus, HR recovery, biological age, AI coaching, correlations, share/export surfaces.
+
+What Forge does well now
+1. Clear section architecture
+Forge now separates Home, Fitness, Biology, Sleep, Focus, and Profile. This is stronger than a single metric wall and closer to how premium apps split "today", "training", "body", and "sleep".
+
+2. Direction-aware metrics
+Forge now understands that higher is not always better. RHR, stress, sleep debt, biological age, respiration drift, and social jetlag are treated differently from HRV, SpO2, recovery, and VO2 max.
+
+3. Good one-glance visual language
+The dark mobile-first dashboard, age hero cards, rings, vertical range markers, and colour semantics are visually coherent. The app now feels closer to a premium consumer health product than a developer dashboard.
+
+4. Useful Focus concept
+The new Focus section is important. Professional coaching apps do not simply show data; they triage what matters. Forge now starts to rank poor markers, small improvements, and strong points.
+
+5. Honest data-limited behaviour
+Removing aerobic decoupling, durability, and DFA alpha-1 from the UI was the right call until workout streams are persisted. This protects trust.
+
+6. Profile/export direction
+The Profile section creates a base layer for future accounts, sharing, identity, and metric normalisation. This aligns with premium products that make health snapshots portable and explainable.
+
+What Forge should improve next
+1. Persist workout-level activity streams
+This is the biggest gap versus Garmin, WHOOP, Bevel, and serious coaches. Forge needs per-workout HR, pace, power, cadence, duration, sport, lap/split data, and ideally RR intervals. Without this, cardio load, sport freshness, HR recovery, decoupling, discipline half-life, and durability are only approximate.
+
+2. Add true historical focus tracking
+The Focus section currently infers priorities from current metric states and trends. The next step is a focus_history table: metric, issue, start date, action plan, weekly check-ins, resolved date, and improvement evidence.
+
+3. Add explainability drawers
+Every score should have "How this is calculated" inside the UI, not only in docs. Users need to see inputs, weights, missing data, confidence, and why the metric changed.
+
+4. Add behaviour correlation controls
+Bevel-style insight systems expose correlations but remind users that correlation is not causation. Forge should show r-values with a plain-English explanation, sample size, confidence, and "what to test next".
+
+5. Improve coach memory
+Coach output is now useful, but it should remember goals, past focus areas, completed actions, and user preferences. This should be deterministic state first, AI wording second.
+
+6. Add medium-term resilience view
+Oura's Resilience is explicitly medium-term. Forge's Physiological Stability is daily against baseline. Add a separate 14-30 day resilience trend that balances stress load, restorative time proxies, sleep quality, HRV, RHR, and recovery.
+
+7. Better readiness colour bands
+Garmin's Training Readiness bands make 1-24 red/poor, 25-49 orange/low, 50-74 green/moderate, 75-94 blue/high, 95-100 purple/prime. Forge should keep its own style but use similarly explicit bands for Recovery, Readiness, and Training Gate.
+
+8. Export and sharing polish
+The new Profile image export is a start. Add share cards for Recovery/Sleep/Strain/Fitness Age and user-configurable privacy toggles.
+
+9. Calibration states
+Professional apps tell users when a metric is calibrating or data-limited. Forge should show "calibrating", "partial data", and "requires workout samples" as first-class states.
+
+10. Multi-user architecture
+The product eventually needs users, encrypted Garmin sessions, profile tables, per-user metrics, and login sessions. The current local setup is fine for a personal cockpit but not a product userbase.
+
+Current product judgement
+Forge is strongest as a decision cockpit: the visual direction, section split, focus system, and direction-aware scoring are moving in the right direction. The remaining gap is less about visual polish and more about data depth, longitudinal coaching memory, and explicit explainability.
+
+Source notes
+- WHOOP publicly frames its product around sleep, strain, stress, recovery, baselines, sleep need, and guidance that translates data into recommendations.
+- Oura Resilience is a medium-term balance of physiological stress and recovery over recent days rather than a single-day score.
+- Garmin Training Readiness combines sleep score, recovery time, HRV status, acute load, sleep history, and stress history with explicit score bands.
+- Bevel's public help describes behaviour insights as statistical correlations and includes newer app areas such as Biological Age, Health Records, Fitness charts, and AI coaching.

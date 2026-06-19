@@ -1,0 +1,104 @@
+.ticker {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 56px;
+  padding: 0 18px;
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0.01)),
+    var(--bg-1);
+  border: 1px solid var(--card-border);
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.ticker__led {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--good);
+  box-shadow: 0 0 12px var(--good), 0 0 22px rgba(107, 227, 164, 0.4);
+  animation: ticker-pulse 1.8s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+@keyframes ticker-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.55; transform: scale(0.85); }
+}
+
+.ticker__label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+
+.ticker__body {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+}
+
+.ticker__text {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  letter-spacing: 0.02em;
+  color: var(--text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  width: 100%;
+}
+
+.ticker__text--muted { color: var(--text-3); }
+.ticker__text--good { color: var(--good); }
+
+.ticker__count {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text-2);
+  flex-shrink: 0;
+}
+
+.ticker__count--good {
+  color: var(--good);
+  background: rgba(107, 227, 164, 0.1);
+  border-color: rgba(107, 227, 164, 0.3);
+}
+
+/* Subtle scan-line texture */
+.ticker__scan {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: repeating-linear-gradient(
+    0deg,
+    rgba(255, 255, 255, 0.012) 0,
+    rgba(255, 255, 255, 0.012) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+  mix-blend-mode: overlay;
+  opacity: 0.6;
+}
+
+.ticker--good {
+  border-color: rgba(107, 227, 164, 0.22);
+  background:
+    linear-gradient(180deg, rgba(107, 227, 164, 0.06), rgba(107, 227, 164, 0.015)),
+    var(--bg-1);
+}
