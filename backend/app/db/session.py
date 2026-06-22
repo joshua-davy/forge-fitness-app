@@ -28,3 +28,6 @@ def get_db():
 def init_db() -> None:
     from app.models import account, goal, health  # noqa: F401
     Base.metadata.create_all(bind=engine)
+    from app.db.migrations import migrate_legacy_schema
+
+    migrate_legacy_schema(engine)

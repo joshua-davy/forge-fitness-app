@@ -9,6 +9,7 @@ interface Props {
   delta: number | null;
   status: string | null;
   drivers: AgeDriver[];
+  periodLabel?: string;
   onClick?: () => void;
 }
 
@@ -22,7 +23,7 @@ const RING_COLOR: Record<string, string> = {
   Fair: "#F2C063", Watch: "#F2C063", "Needs Work": "#FF6B6B", "Elevated Risk": "#FF6B6B",
 };
 
-export function AgeCard({ kind, age, actualAge, delta, status, drivers, onClick }: Props) {
+export function AgeCard({ kind, age, actualAge, delta, status, drivers, periodLabel, onClick }: Props) {
   const isFitness = kind === "fitness";
   const label = isFitness ? "Fitness Age" : "Biological Age";
   const tone = status ? (STATUS_TONE[status] ?? "neutral") : "neutral";
@@ -74,6 +75,7 @@ export function AgeCard({ kind, age, actualAge, delta, status, drivers, onClick 
             <span className="age-card__actual-label">Actual age</span>
             <span className="age-card__actual-val">{actualAge}</span>
           </div>
+          {periodLabel && <div className="age-card__period">{periodLabel}</div>}
           {delta !== null && (
             <div className={`age-card__delta age-card__delta--${delta < 0 ? "good" : delta > 0 ? "bad" : "neutral"}`}>
               {delta < 0 ? `${Math.abs(delta)}y younger` : delta > 0 ? `${delta}y older` : "At your age"}

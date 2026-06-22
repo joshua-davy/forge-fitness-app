@@ -16,35 +16,36 @@ from app.schemas.goal import GoalCreate, GoalUpdate, ReorderItem
 
 # ---------- CRUD ----------
 
-def list_for_date(db: Session, d: date) -> list[Goal]:
+def list_for_date(db: Session, user_id: int, d: date) -> list[Goal]:
     stmt = (
         select(Goal)
-        .where(Goal.date == d)
+        .where(Goal.user_id == user_id, Goal.date == d)
         .order_by(Goal.sort_order.asc(), Goal.id.asc())
     )
     return list(db.execute(stmt).scalars().all())
 
 
-def list_today(db: Session, now: datetime | None = None) -> list[Goal]:
-    return list_for_date(db, get_active_date(now))
+def list_today(db: Session, user_id: int, now: datetime | None = None) -> list[Goal]:
+    return list_for_date(db, user_id, get_active_date(now))
 
 
-def list_tomorrow(db: Session, now: datetime | None = None) -> list[Goal]:
-    return list_for_date(db, get_tomorrow_date(now))
+def list_tomorrow(db: Session, user_id: int, now: datetime | None = None) -> list[Goal]:
+    return list_for_date(db, user_id, get_tomorrow_date(now))
 
 
-def _next_sort_order(db: Session, d: date) -> int:
-    existing = list_for_date(db, d)
+def _next_sort_order(db: Session, user_id: int, d: date) -> int:
+    existing = list_for_date(db, user_id, d)
     return (max((g.sort_order for g in existing), default=-1)) + 1
 
 
-def create(db: Session, payload: GoalCreate, now: datetime | None = None) -> Goal:
+def create(db: Session, user_id: int, payload: GoalCreate, now: datetime | None = None) -> Goal:
     d = payload.date or get_active_date(now)
     g = Goal(
+        user_id=user_id,
         date=d,
         text=payload.text.strip(),
         queued=payload.queued,
-        sort_order=_next_sort_order(db, d),
+        sort_order=_next_sort_order(db, user_id, d),
     )
     db.add(g)
     db.commit()
@@ -52,12 +53,14 @@ def create(db: Session, payload: GoalCreate, now: datetime | None = None) -> Goa
     return g
 
 
-def get(db: Session, goal_id: int) -> Goal | None:
-    return db.get(Goal, goal_id)
+def get(db: Session, user_id: int, goal_id: int) -> Goal | None:
+    return db.execute(
+        select(Goal).where(Goal.id == goal_id, Goal.user_id == user_id)
+    ).scalar_one_or_none()
 
 
-def update(db: Session, goal_id: int, payload: GoalUpdate) -> Goal | None:
-    g = db.get(Goal, goal_id)
+def update(db: Session, user_id: int, goal_id: int, payload: GoalUpdate) -> Goal | None:
+    g = get(db, user_id, goal_id)
     if not g:
         return None
     if payload.text is not None:
@@ -71,25 +74,25 @@ def update(db: Session, goal_id: int, payload: GoalUpdate) -> Goal | None:
         g.sort_order = payload.sort_order
     db.commit()
     db.refresh(g)
-    _maybe_advance_streak(db, g.date)
+    _maybe_advance_streak(db, user_id, g.date)
     return g
 
 
-def delete(db: Session, goal_id: int) -> bool:
-    g = db.get(Goal, goal_id)
+def delete(db: Session, user_id: int, goal_id: int) -> bool:
+    g = get(db, user_id, goal_id)
     if not g:
         return False
     d = g.date
     db.delete(g)
     db.commit()
-    _maybe_advance_streak(db, d)
+    _maybe_advance_streak(db, user_id, d)
     return True
 
 
-def reorder(db: Session, items: list[ReorderItem]) -> int:
+def reorder(db: Session, user_id: int, items: list[ReorderItem]) -> int:
     n = 0
     for it in items:
-        g = db.get(Goal, it.id)
+        g = get(db, user_id, it.id)
         if g:
             g.sort_order = it.sort_order
             n += 1
@@ -97,12 +100,12 @@ def reorder(db: Session, items: list[ReorderItem]) -> int:
     return n
 
 
-def push_remaining(db: Session, from_date: date, to_date: date) -> int:
+def push_remaining(db: Session, user_id: int, from_date: date, to_date: date) -> int:
     """Move all unfinished goals from from_date to to_date."""
-    goals = [g for g in list_for_date(db, from_date) if not g.done]
+    goals = [g for g in list_for_date(db, user_id, from_date) if not g.done]
     if not goals:
         return 0
-    base = _next_sort_order(db, to_date)
+    base = _next_sort_order(db, user_id, to_date)
     for i, g in enumerate(goals):
         g.date = to_date
         g.sort_order = base + i
@@ -113,21 +116,21 @@ def push_remaining(db: Session, from_date: date, to_date: date) -> int:
 
 # ---------- Streak ----------
 
-def _get_or_create_streak(db: Session) -> GoalStreak:
-    s = db.execute(select(GoalStreak).limit(1)).scalar_one_or_none()
+def _get_or_create_streak(db: Session, user_id: int) -> GoalStreak:
+    s = db.execute(select(GoalStreak).where(GoalStreak.user_id == user_id)).scalar_one_or_none()
     if not s:
-        s = GoalStreak(count=0, last_processed_date=None)
+        s = GoalStreak(user_id=user_id, count=0, last_processed_date=None)
         db.add(s)
         db.commit()
         db.refresh(s)
     return s
 
 
-def _maybe_advance_streak(db: Session, d: date) -> None:
-    goals = list_for_date(db, d)
+def _maybe_advance_streak(db: Session, user_id: int, d: date) -> None:
+    goals = list_for_date(db, user_id, d)
     if not goals or not all(g.done for g in goals):
         return
-    s = _get_or_create_streak(db)
+    s = _get_or_create_streak(db, user_id)
     if s.last_processed_date == d:
         return
     if s.last_processed_date is None or d > s.last_processed_date:
@@ -136,14 +139,14 @@ def _maybe_advance_streak(db: Session, d: date) -> None:
         db.commit()
 
 
-def get_streak(db: Session) -> GoalStreak:
-    return _get_or_create_streak(db)
+def get_streak(db: Session, user_id: int) -> GoalStreak:
+    return _get_or_create_streak(db, user_id)
 
 
 # ---------- Analytics ----------
 
-def daily_completion_stats(db: Session, d: date) -> dict:
-    goals = list_for_date(db, d)
+def daily_completion_stats(db: Session, user_id: int, d: date) -> dict:
+    goals = list_for_date(db, user_id, d)
     total = len(goals)
     completed = sum(1 for g in goals if g.done)
     queued = sum(1 for g in goals if g.queued and not g.done)
@@ -157,11 +160,11 @@ def daily_completion_stats(db: Session, d: date) -> dict:
     }
 
 
-def completion_rate_window(db: Session, end: date, days: int = 7) -> dict:
+def completion_rate_window(db: Session, user_id: int, end: date, days: int = 7) -> dict:
     rates = []
     for i in range(days):
         d = end - timedelta(days=i)
-        s = daily_completion_stats(db, d)
+        s = daily_completion_stats(db, user_id, d)
         if s["total"]:
             rates.append(s["completion_rate"])
     avg = sum(rates) / len(rates) if rates else None

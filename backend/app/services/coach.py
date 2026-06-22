@@ -13,33 +13,40 @@ from app.services.profile import actual_age_years
 from app.services.scoring import fitness_age_drivers, biological_age_drivers, compute_fitness_age, compute_biological_age
 
 
-def _latest_snap(db: Session) -> HealthSnapshot | None:
+def _latest_snap(db: Session, user_id: int) -> HealthSnapshot | None:
     d = get_active_date()
-    row = db.execute(select(HealthSnapshot).where(HealthSnapshot.date == d)).scalar_one_or_none()
+    row = db.execute(
+        select(HealthSnapshot).where(HealthSnapshot.user_id == user_id, HealthSnapshot.date == d)
+    ).scalar_one_or_none()
     if not row:
         # fall back to most recent
         row = db.execute(
-            select(HealthSnapshot).where(HealthSnapshot.source == "garmin")
+            select(HealthSnapshot).where(
+                HealthSnapshot.user_id == user_id,
+                HealthSnapshot.source == "garmin",
+            )
             .order_by(HealthSnapshot.date.desc()).limit(1)
         ).scalar_one_or_none()
     return row
 
 
-def _7d_snaps(db: Session) -> list[HealthSnapshot]:
+def _7d_snaps(db: Session, user_id: int) -> list[HealthSnapshot]:
     end = get_active_date()
     start = end - timedelta(days=6)
     return list(db.execute(
-        select(HealthSnapshot).where(HealthSnapshot.date >= start).order_by(HealthSnapshot.date.asc())
+        select(HealthSnapshot)
+        .where(HealthSnapshot.user_id == user_id, HealthSnapshot.date >= start)
+        .order_by(HealthSnapshot.date.asc())
     ).scalars().all())
 
 
-def build_context(db: Session) -> dict:
+def build_context(db: Session, user_id: int) -> dict:
     s = get_settings()
-    actual_age = actual_age_years(db)
-    snap = _latest_snap(db)
-    snaps_7d = _7d_snaps(db)
-    goals = goals_svc.list_today(db)
-    stats = goals_svc.daily_completion_stats(db, get_active_date())
+    actual_age = actual_age_years(db, user_id)
+    snap = _latest_snap(db, user_id)
+    snaps_7d = _7d_snaps(db, user_id)
+    goals = goals_svc.list_today(db, user_id)
+    stats = goals_svc.daily_completion_stats(db, user_id, get_active_date())
     progress = day_progress(wake_hour=s.wake_hour, sleep_hour=s.sleep_hour)
 
     def v(field, default=None):
@@ -52,7 +59,7 @@ def build_context(db: Session) -> dict:
     def latest_v(field):
         row = db.execute(
             select(HealthSnapshot)
-            .where(getattr(HealthSnapshot, field).isnot(None))
+            .where(HealthSnapshot.user_id == user_id, getattr(HealthSnapshot, field).isnot(None))
             .order_by(HealthSnapshot.date.desc())
             .limit(1)
         ).scalar_one_or_none()
@@ -67,7 +74,7 @@ def build_context(db: Session) -> dict:
     bio_age, bio_status = compute_biological_age(snap, actual_age) if snap else (None, None)
     fit_drivers = fitness_age_drivers(snap, actual_age) if snap else []
     bio_drivers = biological_age_drivers(snap, actual_age) if snap else []
-    history = dashboard_insights(db, "90d", get_active_date())
+    history = dashboard_insights(db, user_id, "90d", get_active_date())
 
     return {
         "actual_age": actual_age,
@@ -116,9 +123,9 @@ def build_context(db: Session) -> dict:
     }
 
 
-def recommendations(db: Session) -> dict:
+def recommendations(db: Session, user_id: int) -> dict:
     """Deterministic recommendations — always works without AI."""
-    ctx = build_context(db)
+    ctx = build_context(db, user_id)
     lines = []
 
     if not ctx["has_data"]:
@@ -243,15 +250,15 @@ def _build_risks(ctx: dict) -> list[dict]:
     return risks
 
 
-def generate_ai_brief(db: Session) -> dict:
+def generate_ai_brief(db: Session, user_id: int) -> dict:
     """Generate AI-narrated brief and store to DB."""
-    ctx = build_context(db)
-    det_result = recommendations(db)
+    ctx = build_context(db, user_id)
+    det_result = recommendations(db, user_id)
     s = get_settings()
 
     if not s.openai_api_key:
         # Save deterministic result
-        _save_summary(db, det_result, used_ai=False)
+        _save_summary(db, user_id, det_result, used_ai=False)
         return {**det_result, "used_ai": False, "warning": "OPENAI_API_KEY not set — deterministic fallback used"}
 
     prompt = f"""You are the Forge health coach. Based on this data, write a concise, premium coach brief.
@@ -296,18 +303,21 @@ Rules:
         )
         data = json.loads(resp.choices[0].message.content or "{}")
         result = {**det_result, **data, "confidence": 0.92, "used_ai": True}
-        _save_summary(db, result, used_ai=True)
+        _save_summary(db, user_id, result, used_ai=True)
         return result
     except Exception as e:
         det_result["warning"] = f"AI generation failed: {e}"
-        _save_summary(db, det_result, used_ai=False)
+        _save_summary(db, user_id, det_result, used_ai=False)
         return det_result
 
 
-def _save_summary(db: Session, result: dict, used_ai: bool):
+def _save_summary(db: Session, user_id: int, result: dict, used_ai: bool):
     d = get_active_date()
     existing = db.execute(
-        select(CoachSummary).where(CoachSummary.date == d).order_by(CoachSummary.id.desc()).limit(1)
+        select(CoachSummary)
+        .where(CoachSummary.user_id == user_id, CoachSummary.date == d)
+        .order_by(CoachSummary.id.desc())
+        .limit(1)
     ).scalar_one_or_none()
     if existing:
         existing.headline = result.get("headline", "")
@@ -319,6 +329,7 @@ def _save_summary(db: Session, result: dict, used_ai: bool):
         existing.used_ai = used_ai
     else:
         db.add(CoachSummary(
+            user_id=user_id,
             date=d,
             headline=result.get("headline", ""),
             summary=result.get("summary", ""),

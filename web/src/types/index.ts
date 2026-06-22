@@ -27,6 +27,10 @@ export interface Dashboard {
     date_of_birth: ISODate;
     height_cm: number;
   };
+  age_windows?: {
+    fitness_age: Partial<Record<"7d" | "30d" | "all", number | null>>;
+    biological_age: Partial<Record<"7d" | "30d" | "all", number | null>>;
+  };
   day_progress: DayProgress;
   fitness_age: number | null; fitness_age_status: string | null; fitness_age_delta: number | null;
   fitness_age_drivers: AgeDriver[];
@@ -54,9 +58,10 @@ export interface Dashboard {
 export interface ProfilePayload {
   name: string;
   email: string | null;
-  date_of_birth: ISODate;
-  height_cm: number;
-  actual_age: number;
+  date_of_birth: ISODate | null;
+  sex?: string;
+  height_cm: number | null;
+  actual_age: number | null;
   weight_kg: number | null;
   body_fat_pct: number | null;
   muscle_mass_kg: number | null;
@@ -144,14 +149,95 @@ export interface CoachPayload {
 
 export interface GarminStatus {
   configured: boolean;
+  connected?: boolean;
+  status?: string;
+  account?: string | null;
   email: string | null;
   message: string;
   last_synced_at?: string | null;
   last_sync_age_hours?: number | null;
   is_stale?: boolean;
+  history_import?: HistoryImportJob | null;
+}
+
+export interface HistoryImportJob {
+  id: number;
+  status: "queued" | "running" | "completed" | "completed_with_errors" | "failed";
+  days_requested: number;
+  total_days: number;
+  completed_days: number;
+  synced_days: number;
+  skipped_days: number;
+  failed_days: number;
+  progress_pct: number;
+  current_date?: string | null;
+  error?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
 }
 
 export interface PolishResponse { text: string; original: string; used_ai: boolean; warning: string | null; }
+
+export type BodyGoal = "maintain" | "lose_weight" | "gain_weight" | "gain_muscle" | "lose_fat";
+
+export interface PlanningSettings {
+  body_goal: BodyGoal;
+  work_start: string | null;
+  work_end: string | null;
+  commute_minutes: number | null;
+  preferred_wake: string | null;
+  desired_sleep_hours: number;
+  hidden_cards: string[];
+  available_cards: string[];
+}
+
+export interface NutritionPlan {
+  status: "ready" | "needs_weight" | string;
+  title?: string;
+  goal: BodyGoal;
+  weight_kg?: number;
+  protein_g: { low: number; high: number; midpoint: number } | null;
+  energy_kcal: { estimate: number; bmr: number; activity_kcal: number; goal_adjustment: number } | null;
+  today_activity?: { label: string; duration_minutes: number; types: string[] };
+  confidence: "low" | "medium" | "high" | string;
+  notes: string[];
+}
+
+export interface SleepSchedule {
+  status: "ready" | "needs_history" | string;
+  ideal_bedtime: string | null;
+  ideal_wake_time: string | null;
+  target_bedtime: string | null;
+  wind_down_start: string | null;
+  latest_practical_wake: string | null;
+  sample_nights: number;
+  confidence: "low" | "medium" | "high" | string;
+  notes: string[];
+}
+
+export interface SleepExplorer {
+  range_days: number;
+  filters: Record<string, string | number | null>;
+  points: Array<{ date: string; sleep_score: number | null; bedtime: string | null; wake_time: string | null; deep_minutes: number | null; rem_minutes: number | null; workout_types: string[]; workout_duration_minutes: number; workout_average_hr: number | null }>;
+  summary: { nights: number; average_sleep_score: number | null; confidence: string };
+}
+
+export interface FitnessPrediction {
+  distance_km: number;
+  estimate_seconds: number | null;
+  range_seconds: [number, number] | null;
+  confidence: string;
+}
+
+export interface FitnessPredictions {
+  window_days: number;
+  sessions: Record<string, number>;
+  running: FitnessPrediction[];
+  cycling: FitnessPrediction[];
+  scenario: { title: string; detail: string; confidence: string; improvement?: { window_days: number; change_pct: [number, number]; condition: string } | null; decline?: { window_days: number; change_pct: [number, number]; condition: string } | null };
+  inputs?: { vo2max: number | null; mean_workout_hr: number | null; rpe: number | null };
+  notes: string[];
+}
 
 // Legacy compat
 export interface Ring {

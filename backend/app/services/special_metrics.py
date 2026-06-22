@@ -16,7 +16,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.models.health import HealthSnapshot
-from app.services.insights import range_snaps
+from app.services.insights import RANGE_DAYS, range_snaps
 
 
 @dataclass(frozen=True)
@@ -49,12 +49,74 @@ class SpecialMetric:
         }
 
 
-def special_metrics_payload(db: Session, end: date, range_key: str = "90d") -> dict[str, Any]:
-    snaps = range_snaps(db, end, range_key)
+def special_metrics_payload(db: Session, user_id: int, end: date, range_key: str = "90d") -> dict[str, Any]:
+    snaps = range_snaps(db, user_id, end, range_key)
     return {
         "range": range_key,
         "generated_at": end.isoformat(),
         "metrics": special_metrics_from_snaps(snaps, end),
+    }
+
+
+def special_metric_series(db: Session, user_id: int, key: str, range_key: str, end: date) -> dict[str, Any]:
+    """Build an honest historical series for a derived metric.
+
+    Each point is calculated using only snapshots available on that date. This
+    avoids accidentally applying today's baseline to a historical point.
+    """
+    if key not in special_metrics_from_snaps([], end):
+        # The empty calculation returns every known key, including metrics that
+        # are currently data-limited, so it doubles as our key registry.
+        raise KeyError(key)
+    display_snaps = range_snaps(db, user_id, end, range_key)
+    history = list(db.query(HealthSnapshot).filter(
+        HealthSnapshot.user_id == user_id,
+        HealthSnapshot.date <= end,
+    ).order_by(HealthSnapshot.date.asc()).all())
+    points: list[dict[str, Any]] = []
+    label = key.replace("_", " ").title()
+    unit = ""
+    for snap in display_snaps:
+        available = [row for row in history if row.date <= snap.date]
+        metric = special_metrics_from_snaps(available, snap.date)[key]
+        label = metric["label"]
+        unit = metric["unit"]
+        value = metric["score"] if metric["score"] is not None else metric["value"]
+        if isinstance(value, (int, float)):
+            points.append({"date": snap.date.isoformat(), "value": float(value)})
+    values = [point["value"] for point in points]
+    expected = RANGE_DAYS.get(range_key) or len(display_snaps)
+    latest = points[-1]["value"] if points else None
+    explanation = (
+        f"{label} is recalculated from the health data that was available on each date. "
+        "The chart is a derived metric history, not a proxy chart for Sleep Score."
+    )
+    return {
+        "metric": key,
+        "label": label,
+        "unit": unit,
+        "range": range_key,
+        "series": points,
+        "moving_avg_7d": [],
+        "coverage": {
+            "covered_days": len(points),
+            "expected_days": expected,
+            "coverage_pct": round(len(points) / max(expected, 1) * 100, 1),
+        },
+        "comparison": {"delta": None, "delta_pct": None, "previous_avg": None},
+        "status": "no_data" if latest is None else "derived",
+        "explanation": explanation,
+        "stats": {
+            "min": min(values) if values else None,
+            "max": max(values) if values else None,
+            "avg": round(mean(values), 2) if values else None,
+            "latest": latest,
+            "count": len(points),
+            "std": round(pstdev(values), 2) if len(values) > 1 else None,
+            "trend": "derived",
+        },
+        "flags": [],
+        "insights": [],
     }
 
 

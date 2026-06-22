@@ -6,8 +6,8 @@ scope in small, testable steps.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, UniqueConstraint, func
+from datetime import date, datetime, timezone
+from sqlalchemy import Boolean, Date, DateTime, Float, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -74,6 +74,50 @@ class DataConnection(Base):
         onupdate=_utcnow,
         server_default=func.now(),
         nullable=False,
+    )
+
+
+class SyncJob(Base):
+    """A durable, user-owned Garmin import job."""
+
+    __tablename__ = "sync_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    provider: Mapped[str] = mapped_column(String(40), default="garmin", nullable=False)
+    kind: Mapped[str] = mapped_column(String(40), default="history", nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="queued", nullable=False)
+    days_requested: Mapped[int] = mapped_column(Integer, nullable=False)
+    total_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    completed_days: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    synced_days: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    skipped_days: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    failed_days: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    current_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Workout(Base):
+    """Minimal activity record used for personal timing/intensity analysis."""
+
+    __tablename__ = "workouts"
+    __table_args__ = (UniqueConstraint("user_id", "provider_activity_id", name="uq_workout_user_provider_activity"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    provider_activity_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    activity_date: Mapped[date] = mapped_column(Date, index=True, nullable=False)
+    start_local: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    activity_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    duration_minutes: Mapped[float | None] = mapped_column(Float, nullable=True)
+    distance_km: Mapped[float | None] = mapped_column(Float, nullable=True)
+    average_hr: Mapped[float | None] = mapped_column(Float, nullable=True)
+    max_hr: Mapped[float | None] = mapped_column(Float, nullable=True)
+    calories: Mapped[float | None] = mapped_column(Float, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, server_default=func.now(), nullable=False
     )
 
 

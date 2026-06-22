@@ -13,6 +13,13 @@
 .age-card--bad  { border-color: rgba(255,107,107,0.2); }
 
 .age-card__head { display: flex; justify-content: space-between; align-items: center; }
+.age-card__head .card__label {
+  color: var(--text-1);
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 500;
+  letter-spacing: -0.015em;
+}
 
 .age-card__body { display: flex; align-items: center; gap: 24px; }
 

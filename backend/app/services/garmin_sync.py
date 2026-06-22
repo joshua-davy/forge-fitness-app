@@ -3,66 +3,147 @@ from __future__ import annotations
 
 import json
 import logging
-import os
+import secrets
+import threading
 from datetime import date, datetime, timedelta
 from statistics import mean, pstdev
-from typing import Any
+from typing import Any, Callable
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
+from app.db.session import SessionLocal
+from app.models.account import SyncJob, Workout
 from app.models.health import HealthSnapshot
 from app.services.profile import actual_age_years
 from app.services.scoring import compute_fitness_age, compute_biological_age
+from app.services.connections import (
+    ConnectionSecurityError,
+    decrypt_token_blob,
+    get_connection,
+    upsert_garmin_connection,
+)
 
 log = logging.getLogger(__name__)
-_client_cache: Any = None
 
-SESSION_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "garmin_session")
+def _reset_client(user_id: int) -> None:
+    _user_client_cache.pop(user_id, None)
 
 
-def _get_client():
-    global _client_cache
-    if _client_cache is not None:
-        return _client_cache
+_user_client_cache: dict[int, Any] = {}
+_pending_mfa: dict[str, dict[str, Any]] = {}
+_mfa_lock = threading.Lock()
+_MFA_TTL_SECONDS = 10 * 60
+
+
+def _connection_client(db: Session, user_id: int) -> Any:
+    cached = _user_client_cache.get(user_id)
+    if cached is not None:
+        return cached
+    connection = get_connection(db, user_id)
+    if not connection or connection.status != "connected" or not connection.encrypted_token_blob:
+        raise RuntimeError("Garmin is not connected for this Forge account.")
+    try:
+        token_blob = decrypt_token_blob(connection.encrypted_token_blob)
+    except ConnectionSecurityError as exc:
+        connection.status = "needs_reconnect"
+        connection.last_error = "Saved Garmin session could not be opened. Reconnect Garmin."
+        db.commit()
+        raise RuntimeError(connection.last_error) from exc
 
     from garminconnect import Garmin
-
-    s = get_settings()
-    client = Garmin(s.garmin_email or "", s.garmin_password or "")
-
-    # Load saved session — no login needed
-    if os.path.exists(os.path.join(SESSION_DIR, "oauth1_token.json")):
-        try:
-            client.garth.load(SESSION_DIR)
-            # Test the session
-            client.display_name = client.garth.profile["displayName"]
-            log.info("Garmin session loaded from saved tokens")
-            _client_cache = client
-            # Re-save in case tokens were refreshed
-            client.garth.dump(SESSION_DIR)
-            return client
-        except Exception as e:
-            log.warning("Saved session failed: %s — will try login", e)
-
-    # Fallback: fresh login
-    if not s.garmin_email or not s.garmin_password:
-        raise RuntimeError(
-            "No saved Garmin session and no credentials in .env. "
-            "Run: python login_garmin.py"
-        )
+    client = Garmin()
     try:
-        client.login()
-        client.garth.dump(SESSION_DIR)
-        _client_cache = client
-        return client
-    except Exception as e:
-        raise RuntimeError(f"Garmin login failed: {e}") from e
+        # Token blobs are serialized JSON, not file paths. Loading directly
+        # avoids the library's convenience heuristic that treats short values
+        # as a tokenstore filename.
+        client.client.loads(token_blob)
+        client._load_profile_and_settings()
+    except Exception as exc:
+        connection.status = "needs_reconnect"
+        connection.last_error = "Saved Garmin session has expired. Reconnect Garmin."
+        db.commit()
+        raise RuntimeError(connection.last_error) from exc
+    _user_client_cache[user_id] = client
+    return client
 
 
-def _reset_client():
-    global _client_cache
-    _client_cache = None
+def _finish_connection(db: Session, user_id: int, client: Any) -> dict[str, Any]:
+    subject = getattr(client, "display_name", None) or getattr(client, "full_name", None) or "Garmin account"
+    connection = upsert_garmin_connection(
+        db,
+        user_id=user_id,
+        token_blob=client.client.dumps(),
+        external_subject=subject,
+    )
+    _user_client_cache[user_id] = client
+    return {
+        "status": "connected",
+        "connected": True,
+        "account": connection.external_subject,
+        "message": "Garmin connected. Your password was not stored.",
+    }
+
+
+def connect_user_garmin(db: Session, user_id: int, email: str, password: str) -> dict[str, Any]:
+    """Exchange Garmin credentials for an encrypted per-user session token."""
+    from garminconnect import (
+        Garmin,
+        GarminConnectAuthenticationError,
+        GarminConnectConnectionError,
+        GarminConnectTooManyRequestsError,
+    )
+
+    client = Garmin(email, password, return_on_mfa=True)
+    try:
+        mfa_status, _ = client.login()
+    except GarminConnectTooManyRequestsError as exc:
+        log.warning("Garmin rate-limited a connection attempt for Forge user %s", user_id)
+        raise RuntimeError("Garmin temporarily rate-limited this connection. Wait a few minutes, then try again.") from exc
+    except GarminConnectAuthenticationError as exc:
+        log.info("Garmin authentication rejected for Forge user %s", user_id)
+        raise RuntimeError(
+            "Garmin rejected the sign-in. First sign in at connect.garmin.com and complete any security prompts, then retry."
+        ) from exc
+    except GarminConnectConnectionError as exc:
+        log.warning("Garmin connection failed for Forge user %s: %s", user_id, type(exc).__name__)
+        raise RuntimeError(
+            "Garmin blocked or could not complete this automated sign-in. Check Garmin Connect in a browser, complete any CAPTCHA or device verification, then retry."
+        ) from exc
+    except Exception as exc:
+        log.warning("Unexpected Garmin connection failure for Forge user %s: %s", user_id, type(exc).__name__)
+        raise RuntimeError("Garmin sign-in failed before a session could be created. Retry after checking Garmin Connect in a browser.") from exc
+
+    if mfa_status == "needs_mfa":
+        challenge_id = secrets.token_urlsafe(32)
+        with _mfa_lock:
+            _pending_mfa[challenge_id] = {
+                "user_id": user_id,
+                "client": client,
+                "expires_at": datetime.utcnow() + timedelta(seconds=_MFA_TTL_SECONDS),
+            }
+        return {
+            "status": "mfa_required",
+            "connected": False,
+            "challenge_id": challenge_id,
+            "mfa_method": "verification code",
+            "message": "Garmin sent a verification code. Enter it to finish connecting.",
+        }
+    return _finish_connection(db, user_id, client)
+
+
+def complete_user_garmin_mfa(db: Session, user_id: int, challenge_id: str, code: str) -> dict[str, Any]:
+    with _mfa_lock:
+        pending = _pending_mfa.pop(challenge_id, None)
+    if not pending or pending["user_id"] != user_id or pending["expires_at"] < datetime.utcnow():
+        raise RuntimeError("This Garmin verification challenge expired. Connect Garmin again.")
+    try:
+        pending["client"].client.resume_login(None, code)
+        pending["client"]._load_profile_and_settings()
+    except Exception as exc:
+        log.info("Garmin MFA rejected for Forge user %s", user_id)
+        raise RuntimeError("Garmin could not verify that code. Connect Garmin again and request a new code.") from exc
+    return _finish_connection(db, user_id, pending["client"])
 
 
 def _safe(d: dict, *keys, default=None):
@@ -163,7 +244,11 @@ def _fetch_vo2max(client: Any, ds: str, raw: dict[str, Any]) -> float | None:
     ]
     for endpoint in endpoints:
         try:
-            connectapi = getattr(getattr(client, "garth", None), "connectapi", None) or getattr(client, "connectapi", None)
+            connectapi = (
+                getattr(getattr(client, "client", None), "connectapi", None)
+                or getattr(getattr(client, "garth", None), "connectapi", None)
+                or getattr(client, "connectapi", None)
+            )
             if not connectapi:
                 continue
             data = connectapi(endpoint)
@@ -215,6 +300,49 @@ def _fetch_activities_for_date(client: Any, ds: str, raw: dict[str, Any]) -> lis
     except Exception as e:
         log.debug("Activity for-date lookup failed for %s: %s", ds, e)
     return activities
+
+
+def _activity_number(activity: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        value = activity.get(key)
+        if isinstance(value, (int, float)) and value >= 0:
+            return float(value)
+    return None
+
+
+def _activity_type(activity: dict[str, Any]) -> str | None:
+    raw_type = activity.get("activityType")
+    if isinstance(raw_type, dict):
+        raw_type = raw_type.get("typeKey") or raw_type.get("typeName") or raw_type.get("displayName")
+    if raw_type is None:
+        raw_type = activity.get("activityTypeName") or activity.get("activityName")
+    return str(raw_type).strip()[:80] if raw_type else None
+
+
+def _persist_activities(db: Session, user_id: int, activity_date: date, activities: list[dict[str, Any]]) -> None:
+    """Persist only activity fields needed for personal timing/intensity analysis."""
+    for activity in activities:
+        provider_id = activity.get("activityId") or activity.get("activityUUID")
+        if provider_id is None:
+            continue
+        workout = db.execute(
+            select(Workout).where(
+                Workout.user_id == user_id,
+                Workout.provider_activity_id == str(provider_id),
+            )
+        ).scalar_one_or_none()
+        if workout is None:
+            workout = Workout(user_id=user_id, provider_activity_id=str(provider_id), activity_date=activity_date)
+            db.add(workout)
+        workout.start_local = str(activity.get("startTimeLocal") or activity.get("startTimeGMT") or "")[:40] or None
+        workout.activity_type = _activity_type(activity)
+        duration = _activity_number(activity, "duration", "elapsedDuration", "movingDuration")
+        workout.duration_minutes = round(duration / 60, 1) if duration and duration > 180 else duration
+        distance = _activity_number(activity, "distance", "distanceMeters")
+        workout.distance_km = round(distance / 1000, 2) if distance and distance > 100 else distance
+        workout.average_hr = _activity_number(activity, "averageHR", "avgHR")
+        workout.max_hr = _activity_number(activity, "maxHR")
+        workout.calories = _activity_number(activity, "calories", "activeKilocalories")
 
 
 def _activity_vo2max(activities: list[dict[str, Any]]) -> float | None:
@@ -418,6 +546,7 @@ def _derive_scores(db: Session, snap: HealthSnapshot) -> None:
         snap.cardio_load = round(active * 1.0 + moderate * 1.5 + vigorous * 3.0, 1)
 
     prior = db.query(HealthSnapshot).filter(
+        HealthSnapshot.user_id == snap.user_id,
         HealthSnapshot.date < snap.date,
         HealthSnapshot.date >= snap.date - timedelta(days=42),
         HealthSnapshot.cardio_load.isnot(None),
@@ -433,8 +562,8 @@ def _derive_scores(db: Session, snap: HealthSnapshot) -> None:
         snap.readiness = round(_clamp((snap.recovery or 50) - strain_penalty + 10, 0, 100), 1)
 
 
-def sync_date(db: Session, target_date: date) -> HealthSnapshot:
-    client = _get_client()
+def sync_date(db: Session, target_date: date, user_id: int, client: Any | None = None) -> HealthSnapshot:
+    client = client or _connection_client(db, user_id)
     ds = target_date.isoformat()
     raw: dict[str, Any] = {}
 
@@ -498,15 +627,19 @@ def sync_date(db: Session, target_date: date) -> HealthSnapshot:
     # VO2 Max is attached to qualifying workouts, and HR Recovery comes from
     # workout/post-workout heart-rate samples.
     activities = _fetch_activities_for_date(client, ds, raw)
+    _persist_activities(db, user_id, target_date, activities)
 
     # VO2 max updates sparsely, so fetch it separately from Garmin's biometric/user profile endpoints.
     vo2max = _activity_vo2max(activities) or _fetch_vo2max(client, ds, raw)
     hr_recovery = _fetch_hr_recovery(client, ds, activities, raw)
 
     # Upsert snapshot
-    snap = db.query(HealthSnapshot).filter(HealthSnapshot.date == target_date).first()
+    snap = db.query(HealthSnapshot).filter(
+        HealthSnapshot.user_id == user_id,
+        HealthSnapshot.date == target_date,
+    ).first()
     if not snap:
-        snap = HealthSnapshot(date=target_date)
+        snap = HealthSnapshot(user_id=user_id, date=target_date)
         db.add(snap)
 
     # --- Parse summary ---
@@ -610,7 +743,7 @@ def sync_date(db: Session, target_date: date) -> HealthSnapshot:
     _derive_scores(db, snap)
 
     # Derived scores
-    actual_age = actual_age_years(db)
+    actual_age = actual_age_years(db, user_id)
     snap.fitness_age, snap.fitness_age_status = compute_fitness_age(snap, actual_age)
     snap.biological_age, snap.biological_age_status = compute_biological_age(snap, actual_age)
 
@@ -622,50 +755,182 @@ def sync_date(db: Session, target_date: date) -> HealthSnapshot:
     return snap
 
 
-def sync_today(db: Session) -> dict:
+def sync_today(db: Session, user_id: int) -> dict:
     today = date.today()
     try:
-        snap = sync_date(db, today)
+        snap = sync_date(db, today, user_id)
+        connection = get_connection(db, user_id)
+        if connection:
+            connection.last_synced_at = datetime.utcnow()
+            connection.last_error = None
+            db.commit()
         return {"status": "ok", "date": today.isoformat(), "source": snap.source}
     except RuntimeError as e:
         return {"status": "error", "message": str(e)}
     except Exception as e:
-        _reset_client()
+        _reset_client(user_id)
+        connection = get_connection(db, user_id)
+        if connection:
+            connection.last_error = "Sync failed. Retry from Forge."
+            db.commit()
         log.exception("Garmin sync failed")
         return {"status": "error", "message": f"Sync failed: {e}"}
 
 
-def sync_history(db: Session, days: int = 365) -> dict:
+def sync_history(
+    db: Session,
+    user_id: int,
+    days: int = 365,
+    *,
+    refresh_existing: bool = False,
+    progress: Callable[[dict[str, Any], date], None] | None = None,
+) -> dict:
     today = date.today()
     results = {"synced": 0, "failed": 0, "skipped": 0, "errors": []}
     for i in range(days):
         d = today - timedelta(days=i)
         existing = db.query(HealthSnapshot).filter(
-            HealthSnapshot.date == d, HealthSnapshot.source == "garmin"
+            HealthSnapshot.user_id == user_id,
+            HealthSnapshot.date == d,
+            HealthSnapshot.source == "garmin",
         ).first()
-        if existing:
+        if existing and not refresh_existing:
             _derive_scores(db, existing)
-            actual_age = actual_age_years(db)
+            actual_age = actual_age_years(db, user_id)
             existing.fitness_age, existing.fitness_age_status = compute_fitness_age(existing, actual_age)
             existing.biological_age, existing.biological_age_status = compute_biological_age(existing, actual_age)
             db.commit()
             results["skipped"] += 1
+            results["completed"] = i + 1
+            if progress:
+                progress(results, d)
             continue
         try:
-            sync_date(db, d)
+            sync_date(db, d, user_id)
             results["synced"] += 1
         except Exception as e:
             results["failed"] += 1
             results["errors"].append(f"{d}: {e}")
             if results["failed"] > 10:
-                results["errors"].append("Too many failures — stopping early")
+                results["errors"].append("Too many failures - stopping early")
                 break
+        results["completed"] = i + 1
+        if progress:
+            progress(results, d)
+    connection = get_connection(db, user_id)
+    if connection:
+        connection.last_synced_at = datetime.utcnow()
+        connection.last_error = None if not results["failed"] else f"{results['failed']} day(s) could not be imported."
+        db.commit()
     return results
 
 
-def recompute_existing(db: Session) -> dict:
-    actual_age = actual_age_years(db)
-    rows = db.query(HealthSnapshot).order_by(HealthSnapshot.date.asc()).all()
+def job_payload(job: SyncJob) -> dict[str, Any]:
+    total = max(job.total_days, 1)
+    return {
+        "id": job.id,
+        "status": job.status,
+        "days_requested": job.days_requested,
+        "total_days": job.total_days,
+        "completed_days": job.completed_days,
+        "synced_days": job.synced_days,
+        "skipped_days": job.skipped_days,
+        "failed_days": job.failed_days,
+        "progress_pct": round(job.completed_days / total * 100),
+        "current_date": job.current_date.isoformat() if job.current_date else None,
+        "error": job.error,
+        "started_at": job.started_at.isoformat() if job.started_at else None,
+        "finished_at": job.finished_at.isoformat() if job.finished_at else None,
+    }
+
+
+def latest_history_job(db: Session, user_id: int) -> SyncJob | None:
+    return db.execute(
+        select(SyncJob)
+        .where(SyncJob.user_id == user_id, SyncJob.provider == "garmin", SyncJob.kind == "history")
+        .order_by(SyncJob.started_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+def get_history_job(db: Session, user_id: int, job_id: int) -> SyncJob | None:
+    return db.execute(
+        select(SyncJob).where(SyncJob.id == job_id, SyncJob.user_id == user_id)
+    ).scalar_one_or_none()
+
+
+def _run_history_job(job_id: int, user_id: int, days: int) -> None:
+    db = SessionLocal()
+    try:
+        job = get_history_job(db, user_id, job_id)
+        if not job:
+            return
+        job.status = "running"
+        db.commit()
+
+        def update_progress(result: dict[str, Any], current_day: date) -> None:
+            active_job = get_history_job(db, user_id, job_id)
+            if not active_job:
+                return
+            active_job.completed_days = int(result.get("completed", 0))
+            active_job.synced_days = int(result.get("synced", 0))
+            active_job.skipped_days = int(result.get("skipped", 0))
+            active_job.failed_days = int(result.get("failed", 0))
+            active_job.current_date = current_day
+            db.commit()
+
+        result = sync_history(db, user_id, days, refresh_existing=True, progress=update_progress)
+        job = get_history_job(db, user_id, job_id)
+        if job:
+            job.status = "completed" if result["failed"] == 0 else "completed_with_errors"
+            job.completed_days = int(result.get("completed", days))
+            job.synced_days = result["synced"]
+            job.skipped_days = result["skipped"]
+            job.failed_days = result["failed"]
+            job.error = "; ".join(result["errors"][:2]) or None
+            job.finished_at = datetime.utcnow()
+            db.commit()
+    except Exception:
+        log.exception("Garmin history job %s failed", job_id)
+        job = get_history_job(db, user_id, job_id)
+        if job:
+            job.status = "failed"
+            job.error = "History import failed. Retry from Forge."
+            job.finished_at = datetime.utcnow()
+            db.commit()
+    finally:
+        db.close()
+
+
+def start_history_sync(db: Session, user_id: int, days: int = 365) -> dict[str, Any]:
+    active = db.execute(
+        select(SyncJob)
+        .where(
+            SyncJob.user_id == user_id,
+            SyncJob.provider == "garmin",
+            SyncJob.kind == "history",
+            SyncJob.status.in_(["queued", "running"]),
+        )
+        .order_by(SyncJob.started_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    if active:
+        return job_payload(active)
+
+    bounded_days = min(max(days, 1), 365)
+    job = SyncJob(user_id=user_id, days_requested=bounded_days, total_days=bounded_days)
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    threading.Thread(target=_run_history_job, args=(job.id, user_id, bounded_days), daemon=True).start()
+    return job_payload(job)
+
+
+def recompute_existing(db: Session, user_id: int) -> dict:
+    actual_age = actual_age_years(db, user_id)
+    rows = db.query(HealthSnapshot).filter(
+        HealthSnapshot.user_id == user_id
+    ).order_by(HealthSnapshot.date.asc()).all()
     updated = 0
     for snap in rows:
         _derive_scores(db, snap)

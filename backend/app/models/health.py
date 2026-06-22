@@ -1,16 +1,20 @@
 """Health snapshot — full daily metrics from Garmin + derived scores."""
 from __future__ import annotations
 from datetime import date, datetime
-from sqlalchemy import Boolean, Date, DateTime, Float, Integer, String, Text, func
+from sqlalchemy import Boolean, Date, DateTime, Float, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 from app.db.session import Base
 
 
 class HealthSnapshot(Base):
     __tablename__ = "health_snapshots"
+    __table_args__ = (UniqueConstraint("user_id", "date", name="uq_health_snapshot_user_date"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    date: Mapped[date] = mapped_column(Date, nullable=False, unique=True, index=True)
+    # user_id=0 is reserved for rows imported by pre-account Forge builds.
+    # Application routes never read it for signed-in accounts.
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0", index=True)
+    date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
 
     # Recovery / readiness / strain
     recovery: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -97,6 +101,7 @@ class CoachSummary(Base):
     __tablename__ = "coach_summaries"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0", index=True)
     date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     headline: Mapped[str] = mapped_column(String(300), nullable=False)
     summary: Mapped[str] = mapped_column(Text, nullable=False)
@@ -111,10 +116,32 @@ class CoachSummary(Base):
 class UserProfile(Base):
     __tablename__ = "user_profiles"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0", unique=True, index=True)
     name: Mapped[str] = mapped_column(String(120), default="Forge Athlete", nullable=False)
     date_of_birth: Mapped[date | None] = mapped_column(Date, nullable=True)
+    sex: Mapped[str] = mapped_column(String(20), default="unspecified", nullable=False)
     height_cm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class UserPlanningProfile(Base):
+    """Optional, user-owned inputs for fuel, schedule, and dashboard planning."""
+
+    __tablename__ = "user_planning_profiles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, unique=True, index=True)
+    body_goal: Mapped[str] = mapped_column(String(32), default="maintain", nullable=False)
+    work_start_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    work_end_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    commute_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    preferred_wake_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    desired_sleep_hours: Mapped[float] = mapped_column(Float, default=8.0, nullable=False)
+    hidden_cards_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now(), nullable=False

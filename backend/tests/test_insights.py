@@ -35,6 +35,7 @@ def seed_history(days: int = 30) -> None:
             d = today - timedelta(days=days - index - 1)
             db.add(
                 HealthSnapshot(
+                    user_id=1,
                     date=d,
                     source="garmin",
                     recovery=58 + index * 0.7,
@@ -46,6 +47,10 @@ def seed_history(days: int = 30) -> None:
                     sleep_debt_minutes=max(0, 90 - index),
                     sleep_need_minutes=480,
                     sleep_start_local=f"{d.isoformat()}T22:{index % 6}0:00",
+                    sleep_end_local=f"{(d + timedelta(days=1)).isoformat()}T06:{index % 4}0:00",
+                    sleep_deep_minutes=78 + (index % 12),
+                    sleep_rem_minutes=96 + (index % 10),
+                    sleep_light_minutes=240 + (index % 15),
                     hrv_ms=44 + index * 0.8,
                     hrv_baseline_ms=52,
                     rhr_bpm=64 - index * 0.15,
@@ -73,8 +78,11 @@ def seed_history(days: int = 30) -> None:
 def test_metric_detail_payload_contains_history_intelligence():
     seed_history()
     client = TestClient(app)
+    auth = client.post("/api/auth/signup", json={"email": "insights-one@example.com", "password": "correct-horse-99", "display_name": "Insights"})
+    assert auth.status_code == 201
+    headers = {"Authorization": f"Bearer {auth.json()['token']}"}
 
-    response = client.get("/api/metrics/hrv?range=30d")
+    response = client.get("/api/metrics/hrv?range=30d", headers=headers)
     assert response.status_code == 200
     body = response.json()
 
@@ -91,8 +99,11 @@ def test_metric_detail_payload_contains_history_intelligence():
 def test_dashboard_insights_returns_flags_insights_and_patterns():
     seed_history()
     client = TestClient(app)
+    auth = client.post("/api/auth/signup", json={"email": "insights-two@example.com", "password": "correct-horse-99", "display_name": "Insights"})
+    assert auth.status_code == 201
+    headers = {"Authorization": f"Bearer {auth.json()['token']}"}
 
-    response = client.get("/api/insights?range=30d")
+    response = client.get("/api/insights?range=30d", headers=headers)
     assert response.status_code == 200
     body = response.json()
 
@@ -104,3 +115,19 @@ def test_dashboard_insights_returns_flags_insights_and_patterns():
         "training_recovery_lag",
         "stress_recovery",
     }
+
+
+def test_derived_sleep_metric_has_its_own_history_series():
+    seed_history()
+    client = TestClient(app)
+    auth = client.post("/api/auth/signup", json={"email": "insights-three@example.com", "password": "correct-horse-99", "display_name": "Insights"})
+    assert auth.status_code == 201
+    headers = {"Authorization": f"Bearer {auth.json()['token']}"}
+
+    response = client.get("/api/metrics/sleep_regularity?range=30d", headers=headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["metric"] == "sleep_regularity"
+    assert body["label"] == "Sleep Regularity"
+    assert body["stats"]["count"] > 0
+    assert body["explanation"].endswith("not a proxy chart for Sleep Score.")

@@ -1,66 +1,184 @@
-"""Garmin sync routes — real implementation using garminconnect."""
+"""User-scoped Garmin connection and sync routes."""
 from __future__ import annotations
-import os
+
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel, Field, SecretStr
 from sqlalchemy.orm import Session
+
+from app.api.routes.auth import current_user
 from app.db.session import get_db
-from app.models.health import HealthSnapshot
+from app.models.account import UserAccount
 from app.services import garmin_sync
+from app.services.connections import (
+    disconnect_garmin,
+    get_connection,
+    public_connection_status,
+)
+from app.services.rate_limit import enforce_rate_limit
 
-router = APIRouter(prefix="/api/sync", tags=["garmin"])
-
-
-@router.post("/garmin")
-def sync_garmin_today(db: Session = Depends(get_db)):
-    result = garmin_sync.sync_today(db)
-    if result["status"] == "error":
-        raise HTTPException(status_code=502, detail=result["message"])
-    return result
+router = APIRouter(tags=["garmin"])
 
 
-@router.post("/garmin/history")
-def sync_garmin_history(days: int = 365, db: Session = Depends(get_db)):
-    """Import historical data. Runs synchronously — may be slow for 365 days."""
-    try:
-        result = garmin_sync.sync_history(db, days=min(days, 365))
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=str(e))
+class GarminConnectInput(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    password: SecretStr = Field(min_length=1, max_length=200)
 
 
-@router.get("/garmin/status")
-def garmin_status(db: Session = Depends(get_db)):
-    from app.core.config import get_settings
-    s = get_settings()
-    token_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "garmin_session", "oauth1_token.json"))
-    has_tokens = os.path.exists(token_path)
-    configured = bool(s.garmin_email and s.garmin_password) or has_tokens
-    latest = db.execute(
-        select(HealthSnapshot)
-        .where(HealthSnapshot.source == "garmin")
-        .order_by(HealthSnapshot.updated_at.desc())
-        .limit(1)
-    ).scalar_one_or_none()
-    last_synced_at = latest.updated_at.replace(tzinfo=timezone.utc).isoformat() if latest and latest.updated_at else None
-    last_sync_age_hours = None
+class GarminMfaInput(BaseModel):
+    challenge_id: str = Field(min_length=20, max_length=200)
+    code: SecretStr = Field(min_length=4, max_length=20)
+
+
+def _connection_status(db: Session, user: UserAccount) -> dict:
+    connection = get_connection(db, user.id)
+    payload = public_connection_status(connection)
+    age_hours = None
     is_stale = True
-    if latest and latest.updated_at:
-        last_sync_age_hours = round((datetime.utcnow() - latest.updated_at).total_seconds() / 3600, 1)
-        is_stale = last_sync_age_hours > 6
+    if connection and connection.last_synced_at:
+        synced_at = connection.last_synced_at
+        if synced_at.tzinfo is None:
+            synced_at = synced_at.replace(tzinfo=timezone.utc)
+        age_hours = round((datetime.now(timezone.utc) - synced_at).total_seconds() / 3600, 1)
+        is_stale = age_hours > 6
+    latest_job = garmin_sync.latest_history_job(db, user.id)
     return {
-        "configured": configured,
-        "email": s.garmin_email[:4] + "****" if s.garmin_email else ("saved session" if has_tokens else None),
-        "message": "Garmin credentials configured" if s.garmin_email else (
-            "Saved Garmin session loaded" if has_tokens else "Set GARMIN_EMAIL and GARMIN_PASSWORD in your .env file"
+        **payload,
+        "email": payload["account"],  # legacy UI compatibility; never Garmin email.
+        "message": (
+            "Garmin connected for this account."
+            if payload["configured"]
+            else "Connect Garmin to import this account's health history."
         ),
-        "last_synced_at": last_synced_at,
-        "last_sync_age_hours": last_sync_age_hours,
+        "last_sync_age_hours": age_hours,
         "is_stale": is_stale,
+        "history_import": garmin_sync.job_payload(latest_job) if latest_job else None,
     }
 
 
-@router.post("/garmin/recompute")
-def recompute_existing_metrics(db: Session = Depends(get_db)):
-    return garmin_sync.recompute_existing(db)
+@router.post("/api/garmin/connect")
+def connect_garmin(
+    payload: GarminConnectInput,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: UserAccount = Depends(current_user),
+):
+    enforce_rate_limit(f"garmin-connect:{request.client.host if request.client else 'unknown'}:{user.id}", limit=6, window_seconds=900)
+    try:
+        return garmin_sync.connect_user_garmin(
+            db,
+            user.id,
+            payload.email.strip(),
+            payload.password.get_secret_value(),
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+
+@router.post("/api/garmin/mfa/verify")
+def verify_garmin_mfa(
+    payload: GarminMfaInput,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: UserAccount = Depends(current_user),
+):
+    enforce_rate_limit(f"garmin-mfa:{request.client.host if request.client else 'unknown'}:{user.id}", limit=8, window_seconds=600)
+    try:
+        return garmin_sync.complete_user_garmin_mfa(
+            db,
+            user.id,
+            payload.challenge_id,
+            payload.code.get_secret_value(),
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+
+@router.get("/api/sync/garmin/status")
+def garmin_status(
+    db: Session = Depends(get_db),
+    user: UserAccount = Depends(current_user),
+):
+    return _connection_status(db, user)
+
+
+@router.delete("/api/garmin/connection", status_code=status.HTTP_204_NO_CONTENT)
+def disconnect_garmin_route(
+    db: Session = Depends(get_db),
+    user: UserAccount = Depends(current_user),
+):
+    disconnect_garmin(db, user.id)
+
+
+@router.post("/api/sync/garmin")
+def sync_garmin_today(
+    db: Session = Depends(get_db),
+    user: UserAccount = Depends(current_user),
+):
+    connection = get_connection(db, user.id)
+    if not connection or connection.status != "connected" or not connection.encrypted_token_blob:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Garmin is not connected for this Forge account. Connect it before syncing.",
+        )
+    history_job = garmin_sync.latest_history_job(db, user.id)
+    if history_job and history_job.status in {"queued", "running"}:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "A Garmin history import is already running. Daily sync will resume when it finishes.",
+        )
+    result = garmin_sync.sync_today(db, user.id)
+    if result["status"] == "error":
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=result["message"])
+    return result
+
+
+@router.post("/api/sync/garmin/history")
+def sync_garmin_history(
+    days: int = 365,
+    db: Session = Depends(get_db),
+    user: UserAccount = Depends(current_user),
+):
+    connection = get_connection(db, user.id)
+    if not connection or connection.status != "connected" or not connection.encrypted_token_blob:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Garmin is not connected for this Forge account. Connect it before importing history.",
+        )
+    try:
+        return garmin_sync.sync_history(db, user.id, days=min(max(days, 1), 365))
+    except RuntimeError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+
+@router.post("/api/sync/garmin/history/start")
+def start_garmin_history_import(
+    days: int = 365,
+    db: Session = Depends(get_db),
+    user: UserAccount = Depends(current_user),
+):
+    connection = get_connection(db, user.id)
+    if not connection or connection.status != "connected" or not connection.encrypted_token_blob:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Connect Garmin before importing history.")
+    return garmin_sync.start_history_sync(db, user.id, days)
+
+
+@router.get("/api/sync/garmin/history/jobs/{job_id}")
+def garmin_history_import_status(
+    job_id: int,
+    db: Session = Depends(get_db),
+    user: UserAccount = Depends(current_user),
+):
+    job = garmin_sync.get_history_job(db, user.id, job_id)
+    if not job:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "History import job not found.")
+    return garmin_sync.job_payload(job)
+
+
+@router.post("/api/sync/garmin/recompute")
+def recompute_existing_metrics(
+    db: Session = Depends(get_db),
+    user: UserAccount = Depends(current_user),
+):
+    return garmin_sync.recompute_existing(db, user.id)

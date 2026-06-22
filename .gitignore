@@ -13,5 +13,7 @@ forge.db
 *.db
 .DS_Store
 *.log
+.forge_connection.key
+backend/garmin_session/
 .idea/
 .vscode/

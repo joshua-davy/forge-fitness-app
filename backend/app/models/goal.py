@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
-from sqlalchemy import Boolean, Date, DateTime, Integer, String, func
+from sqlalchemy import Boolean, Date, DateTime, Integer, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -16,6 +16,7 @@ class Goal(Base):
     __tablename__ = "goals"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0", index=True)
     date: Mapped[date] = mapped_column(Date, index=True, nullable=False)
     text: Mapped[str] = mapped_column(String(500), nullable=False)
     done: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -36,7 +37,9 @@ class Goal(Base):
 
 class GoalStreak(Base):
     __tablename__ = "goal_streak"
+    __table_args__ = (UniqueConstraint("user_id", name="uq_goal_streak_user"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0", index=True)
     count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_processed_date: Mapped[date | None] = mapped_column(Date, nullable=True)

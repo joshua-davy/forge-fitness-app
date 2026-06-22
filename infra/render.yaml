@@ -18,6 +18,8 @@ services:
         sync: false
       - key: OPENAI_MODEL
         value: gpt-4o-mini
+      - key: FORGE_CONNECTION_ENCRYPTION_KEY
+        sync: false
       - key: CORS_ORIGINS
         sync: false  # set after web URL is known
 
@@ -29,8 +31,8 @@ services:
     plan: starter
     region: frankfurt
     envVars:
-      - key: VITE_API_URL
-        sync: false  # set to https://forge-backend.onrender.com
+      - key: FORGE_API_URL
+        sync: false  # set to https://forge-backend.onrender.com at runtime
 
 databases:
   - name: forge-db

@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.models.account import AuditLog, UserAccount
+from app.models.health import UserProfile
 from app.services.security import (
     create_session,
     get_user_by_token,
@@ -21,13 +22,14 @@ from app.services.security import (
     revoke_token,
     verify_password,
 )
+from app.services.rate_limit import enforce_rate_limit
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
 class SignupInput(BaseModel):
     email: str = Field(min_length=3, max_length=320)
-    password: str = Field(min_length=10, max_length=200)
+    password: str = Field(min_length=12, max_length=200)
     display_name: str = Field(default="Forge Athlete", min_length=1, max_length=120)
 
     @field_validator("email")
@@ -97,6 +99,7 @@ def _audit(db: Session, event_type: str, detail: str, user_id: int | None = None
 @router.post("/signup", response_model=AuthPayload, status_code=status.HTTP_201_CREATED)
 def signup(payload: SignupInput, request: Request, db: Session = Depends(get_db)):
     email = normalize_email(payload.email)
+    enforce_rate_limit(f"signup:{request.client.host if request.client else 'unknown'}:{email}", limit=4, window_seconds=3600)
     existing = db.execute(select(UserAccount).where(UserAccount.email == email)).scalar_one_or_none()
     if existing:
         raise HTTPException(status.HTTP_409_CONFLICT, "An account already exists for this email")
@@ -108,6 +111,7 @@ def signup(payload: SignupInput, request: Request, db: Session = Depends(get_db)
     )
     db.add(user)
     db.flush()
+    db.add(UserProfile(user_id=user.id, name=user.display_name))
     _audit(db, "auth.signup", f"Created account for {email}", user.id)
     db.commit()
     db.refresh(user)
@@ -123,6 +127,7 @@ def signup(payload: SignupInput, request: Request, db: Session = Depends(get_db)
 @router.post("/login", response_model=AuthPayload)
 def login(payload: LoginInput, request: Request, db: Session = Depends(get_db)):
     email = normalize_email(payload.email)
+    enforce_rate_limit(f"login:{request.client.host if request.client else 'unknown'}:{email}", limit=8, window_seconds=900)
     user = db.execute(select(UserAccount).where(UserAccount.email == email)).scalar_one_or_none()
     if not user or not verify_password(payload.password, user.password_hash):
         _audit(db, "auth.login_failed", f"Failed login for {email}")

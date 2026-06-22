@@ -1,6 +1,6 @@
-import type { AuthPayload, AuthUser, CoachPayload, Dashboard, DayProgress, GarminStatus, Goal, InsightsPayload, MetricSeries, PolishResponse, ProfilePayload, SpecialMetric, Streak } from "@/types";
+import type { AuthPayload, AuthUser, CoachPayload, Dashboard, DayProgress, FitnessPredictions, GarminStatus, Goal, HistoryImportJob, InsightsPayload, MetricSeries, NutritionPlan, PlanningSettings, PolishResponse, ProfilePayload, SleepExplorer, SleepSchedule, SpecialMetric, Streak } from "@/types";
 
-const configuredBase = import.meta.env.VITE_API_URL as string | undefined;
+const configuredBase = window.__FORGE_API_URL__ || import.meta.env.VITE_API_URL as string | undefined;
 const BASE = configuredBase || (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
   ? "http://127.0.0.1:8001"
   : "");
@@ -56,9 +56,24 @@ export const api = {
 
   // Garmin
   garminStatus: () => req<GarminStatus>("/api/sync/garmin/status"),
+  connectGarmin: (payload: { email: string; password: string }) =>
+    req<{ status: string; connected: boolean; account?: string | null; challenge_id?: string; mfa_method?: string; message: string }>("/api/garmin/connect", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  verifyGarminMfa: (payload: { challenge_id: string; code: string }) =>
+    req<{ status: string; connected: boolean; account?: string | null; message: string }>("/api/garmin/mfa/verify", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  disconnectGarmin: () => req<void>("/api/garmin/connection", { method: "DELETE" }),
   syncGarmin: () => req<{ status: string; date: string }>("/api/sync/garmin", { method: "POST" }),
   syncGarminHistory: (days = 365) =>
     req<{ synced: number; failed: number; skipped: number }>(`/api/sync/garmin/history?days=${days}`, { method: "POST" }),
+  startGarminHistoryImport: (days = 365) =>
+    req<HistoryImportJob>(`/api/sync/garmin/history/start?days=${days}`, { method: "POST" }),
+  garminHistoryImport: (jobId: number) =>
+    req<HistoryImportJob>(`/api/sync/garmin/history/jobs/${jobId}`),
   saveBodyComposition: (payload: { date?: string; weight_kg?: number | null; body_fat_pct?: number | null; muscle_mass_kg?: number | null }) =>
     req<{ date: string; weight_kg: number | null; body_fat_pct: number | null; muscle_mass_kg: number | null; bmi: number | null }>("/api/body-composition", {
       method: "POST",
@@ -73,6 +88,16 @@ export const api = {
     req<{ range: string; generated_at: string; metrics: Record<string, SpecialMetric> }>(withParams("/api/special-metrics", { range, date })),
   fitnessAge: () => req<Record<string, unknown>>("/api/fitness-age"),
   biologicalAge: () => req<Record<string, unknown>>("/api/biological-age"),
+
+  // Planning: optional user settings and derived decision aids.
+  planning: () => req<PlanningSettings>("/api/planning"),
+  updatePlanning: (payload: Partial<PlanningSettings>) =>
+    req<PlanningSettings>("/api/planning", { method: "PUT", body: JSON.stringify(payload) }),
+  nutritionPlan: (date?: string | null) => req<NutritionPlan>(withParams("/api/planning/nutrition", { date })),
+  sleepSchedule: (date?: string | null) => req<SleepSchedule>(withParams("/api/planning/sleep-schedule", { date })),
+  sleepExplorer: (params: { days?: number; bedtime_from?: string; bedtime_to?: string; activity_kind?: string; min_duration?: number; date?: string | null }) =>
+    req<SleepExplorer>(withParams("/api/planning/sleep-explorer", params)),
+  fitnessPredictions: (date?: string | null) => req<FitnessPredictions>(withParams("/api/planning/fitness-predictions", { date })),
 
   // Coach
   coachToday: () => req<CoachPayload>("/api/coach/today"),

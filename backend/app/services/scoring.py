@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 # FITNESS AGE
 # ────────────────────────────────────────────────
 
-def compute_fitness_age(snap: "HealthSnapshot", actual_age: float) -> tuple[float | None, str | None]:
+def compute_fitness_age(snap: "HealthSnapshot | None", actual_age: float | None) -> tuple[float | None, str | None]:
     """
     Fitness Age = actual_age adjusted by cardiovascular/training metrics.
     Each driver contributes ± years relative to population norms.
@@ -44,11 +44,13 @@ def compute_fitness_age(snap: "HealthSnapshot", actual_age: float) -> tuple[floa
     return fitness_age, status
 
 
-def fitness_age_drivers(snap: "HealthSnapshot", actual_age: float) -> list[dict] | None:
+def fitness_age_drivers(snap: "HealthSnapshot | None", actual_age: float | None) -> list[dict] | None:
     """
     Returns list of driver dicts with:
       name, value, unit, adjustment_years, direction (helping/hurting/neutral)
     """
+    if snap is None or actual_age is None:
+        return None
     drivers = []
 
     # VO2max — biggest single driver (±6 years)
@@ -159,7 +161,7 @@ def fitness_age_drivers(snap: "HealthSnapshot", actual_age: float) -> list[dict]
 # BIOLOGICAL AGE
 # ────────────────────────────────────────────────
 
-def compute_biological_age(snap: "HealthSnapshot", actual_age: float) -> tuple[float | None, str | None]:
+def compute_biological_age(snap: "HealthSnapshot | None", actual_age: float | None) -> tuple[float | None, str | None]:
     """
     Biological Age = actual_age adjusted by recovery, sleep, stress, autonomic balance.
     Separate from Fitness Age — answers: how well is the body maintaining homeostasis?
@@ -188,7 +190,9 @@ def compute_biological_age(snap: "HealthSnapshot", actual_age: float) -> tuple[f
     return biological_age, status
 
 
-def biological_age_drivers(snap: "HealthSnapshot", actual_age: float) -> list[dict] | None:
+def biological_age_drivers(snap: "HealthSnapshot | None", actual_age: float | None) -> list[dict] | None:
+    if snap is None or actual_age is None:
+        return None
     drivers = []
 
     # HRV Baseline (±3 years)

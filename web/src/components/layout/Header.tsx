@@ -2,6 +2,7 @@ import "./Header.css";
 
 interface Props {
   date: string; // ISO yyyy-mm-dd
+  greetingName?: string | null;
   onPreviousDay?: () => void;
   onNextDay?: () => void;
   onToday?: () => void;
@@ -20,7 +21,7 @@ function pretty(iso: string): string {
   }
 }
 
-export function Header({ date, onPreviousDay, onNextDay, onToday, nextDisabled }: Props) {
+export function Header({ date, greetingName, onPreviousDay, onNextDay, onToday, nextDisabled }: Props) {
   return (
     <header className="forge-header">
       <div className="forge-header__brand">
@@ -42,8 +43,9 @@ export function Header({ date, onPreviousDay, onNextDay, onToday, nextDisabled }
           </svg>
         </div>
         <div>
-          <div className="forge-header__eyebrow">FORGE / DAILY COMMAND CENTRE</div>
-          <h1 className="forge-header__title">Today</h1>
+          <div className="forge-header__eyebrow">DAILY COMMAND CENTRE</div>
+          <h1 className="forge-header__title">FORGE</h1>
+          {greetingName && <div className="forge-header__greeting">Welcome back, {greetingName}.</div>}
         </div>
       </div>
       <div className="forge-header__date">

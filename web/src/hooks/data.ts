@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
-import type { CoachPayload, Dashboard, DayProgress, GarminStatus, Goal, InsightsPayload, Streak } from "@/types";
+import type { CoachPayload, Dashboard, DayProgress, FitnessPredictions, GarminStatus, Goal, InsightsPayload, NutritionPlan, PlanningSettings, SleepSchedule, Streak } from "@/types";
 
-function usePoll<T>(fetcher: () => Promise<T>, intervalMs = 60_000) {
+function usePoll<T>(fetcher: () => Promise<T>, intervalMs = 60_000, enabled = true) {
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
@@ -14,36 +14,52 @@ function usePoll<T>(fetcher: () => Promise<T>, intervalMs = 60_000) {
     finally { setLoading(false); }
   }, [fetcher]);
   useEffect(() => {
+    if (!enabled) {
+      setData(null);
+      setError(null);
+      setLoading(false);
+      return;
+    }
     refresh();
     const id = window.setInterval(refresh, intervalMs);
     return () => window.clearInterval(id);
-  }, [refresh, intervalMs]);
+  }, [refresh, intervalMs, enabled]);
   return { data, loading, error, refresh };
 }
 
-export function useDayProgress() {
-  return usePoll(api.dayProgress, 60_000);
+export function useDayProgress(enabled = true) {
+  return usePoll(api.dayProgress, 60_000, enabled);
 }
 
-export function useDashboard(date?: string | null) {
+export function useDashboard(date?: string | null, enabled = true) {
   const fetcher = useCallback(() => api.dashboard(date), [date]);
-  return usePoll(fetcher, 60_000);
+  return usePoll(fetcher, 60_000, enabled);
 }
 
-export function useCoach() {
-  return usePoll(api.coachToday, 5 * 60_000);
+export function useCoach(enabled = true) {
+  return usePoll(api.coachToday, 5 * 60_000, enabled);
 }
 
-export function useGarminStatus() {
-  return usePoll(api.garminStatus, 30_000);
+export function useGarminStatus(enabled = true) {
+  return usePoll(api.garminStatus, 30_000, enabled);
 }
 
-export function useInsights(date?: string | null) {
+export function useInsights(date?: string | null, enabled = true) {
   const fetcher = useCallback(() => api.insights("90d", date), [date]);
-  return usePoll<InsightsPayload>(fetcher, 5 * 60_000);
+  return usePoll<InsightsPayload>(fetcher, 5 * 60_000, enabled);
 }
 
-export function useGoals() {
+export function usePlanning(date?: string | null, enabled = true) {
+  const fetcher = useCallback(async () => {
+    const [settings, nutrition, sleep, predictions] = await Promise.all([
+      api.planning(), api.nutritionPlan(date), api.sleepSchedule(date), api.fitnessPredictions(date),
+    ]);
+    return { settings, nutrition, sleep, predictions } as { settings: PlanningSettings; nutrition: NutritionPlan; sleep: SleepSchedule; predictions: FitnessPredictions };
+  }, [date]);
+  return usePoll(fetcher, 5 * 60_000, enabled);
+}
+
+export function useGoals(enabled = true) {
   const [today, setToday] = useState<Goal[]>([]);
   const [tomorrow, setTomorrow] = useState<Goal[]>([]);
   const [streak, setStreak] = useState<Streak | null>(null);
@@ -51,13 +67,17 @@ export function useGoals() {
   const inflight = useRef(false);
 
   const refresh = useCallback(async () => {
+    if (!enabled) {
+      setToday([]); setTomorrow([]); setStreak(null); setLoading(false);
+      return;
+    }
     if (inflight.current) return;
     inflight.current = true;
     try {
       const [t, tm, s] = await Promise.all([api.todayGoals(), api.tomorrowGoals(), api.streak()]);
       setToday(t); setTomorrow(tm); setStreak(s);
     } finally { inflight.current = false; setLoading(false); }
-  }, []);
+  }, [enabled]);
 
   useEffect(() => { refresh(); }, [refresh]);
 

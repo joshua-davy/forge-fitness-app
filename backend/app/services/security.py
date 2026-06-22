@@ -16,7 +16,10 @@ from sqlalchemy.orm import Session
 
 from app.models.account import AuthSession, UserAccount
 
-PBKDF2_ITERATIONS = 260_000
+# OWASP's current PBKDF2-HMAC-SHA256 guidance is at least 600k iterations.
+# Stored hashes retain their iteration count so existing local accounts remain
+# valid while new or changed passwords receive the stronger work factor.
+PBKDF2_ITERATIONS = 600_000
 SESSION_DAYS = 30
 
 

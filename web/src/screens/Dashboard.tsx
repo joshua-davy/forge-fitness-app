@@ -9,23 +9,27 @@ import { MetricChart } from "@/components/health/MetricChart";
 import { HealthRings } from "@/components/health/HealthRings";
 import { RangeMarkerCard } from "@/components/health/RangeMarkerCard";
 import { Header } from "@/components/layout/Header";
-import { Onboarding } from "@/components/layout/Onboarding";
 import { api } from "@/lib/api";
-import { useCoach, useDashboard, useDayProgress, useGarminStatus, useGoals, useInsights } from "@/hooks/data";
-import type { AuthUser, CoachPayload, Dashboard, InsightsPayload, MetricSeries, SpecialMetric } from "@/types";
+import { useCoach, useDashboard, useDayProgress, useGarminStatus, useGoals, useInsights, usePlanning } from "@/hooks/data";
+import type { AuthUser, CoachPayload, Dashboard, FitnessPredictions, HistoryImportJob, InsightsPayload, MetricSeries, NutritionPlan, PlanningSettings, SleepSchedule, SpecialMetric } from "@/types";
 import "./Dashboard.css";
 
-type AppSection = "home" | "fitness" | "biology" | "sleep" | "focus" | "profile";
+type AppSection = "start" | "home" | "fitness" | "biology" | "sleep" | "focus" | "profile";
+type AgeWindow = "7d" | "30d" | "all";
 type MetricFilter = "all" | "poor" | "watch" | "good" | "missing";
 
 export function DashboardScreen() {
   const [selectedDate, setSelectedDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const { data: dash, loading: dashLoading, refresh: refreshDash } = useDashboard(selectedDate);
-  const { data: day } = useDayProgress();
-  const { data: coach, error: coachError, refresh: refreshCoach } = useCoach();
-  const { data: garmin } = useGarminStatus();
-  const { data: insights } = useInsights(selectedDate);
-  const goals = useGoals();
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authResolved, setAuthResolved] = useState(false);
+  const authenticated = authResolved && authUser !== null;
+  const { data: dash, loading: dashLoading, refresh: refreshDash } = useDashboard(selectedDate, authenticated);
+  const { data: day } = useDayProgress(authenticated);
+  const { data: coach, error: coachError, refresh: refreshCoach } = useCoach(authenticated);
+  const { data: garmin, refresh: refreshGarmin } = useGarminStatus(authenticated);
+  const { data: insights } = useInsights(selectedDate, authenticated);
+  const { data: planningData, refresh: refreshPlanning } = usePlanning(selectedDate, authenticated);
+  const goals = useGoals(authenticated);
 
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
@@ -35,10 +39,17 @@ export function DashboardScreen() {
   const [profileDraft, setProfileDraft] = useState({ name: "", dateOfBirth: "", heightCm: "", weight: "", bodyFat: "", muscleMass: "" });
   const [profileDirty, setProfileDirty] = useState(false);
   const [profileMsg, setProfileMsg] = useState<string | null>(null);
-  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [authDraft, setAuthDraft] = useState({ email: "", password: "", displayName: "" });
   const [authMsg, setAuthMsg] = useState<string | null>(null);
-  const [section, setSection] = useState<AppSection>("home");
+  const [garminDraft, setGarminDraft] = useState({ email: "", password: "" });
+  const [garminMfaChallenge, setGarminMfaChallenge] = useState<string | null>(null);
+  const [garminMfaCode, setGarminMfaCode] = useState("");
+  const [garminMsg, setGarminMsg] = useState<string | null>(null);
+  const [garminConnecting, setGarminConnecting] = useState(false);
+  const [garminImporting, setGarminImporting] = useState(false);
+  const [historyImport, setHistoryImport] = useState<HistoryImportJob | null>(null);
+  const [section, setSection] = useState<AppSection>("start");
+  const [ageWindow, setAgeWindow] = useState<AgeWindow>("7d");
   const [metricFilter, setMetricFilter] = useState<MetricFilter>("all");
   const [fitnessSeries, setFitnessSeries] = useState<Record<string, MetricSeries | null>>({});
   const bootSynced = useRef(false);
@@ -48,7 +59,7 @@ export function DashboardScreen() {
     try {
       await api.syncGarmin();
       setSyncMsg("Synced ✓");
-      refreshDash(); refreshCoach();
+      refreshDash(); refreshCoach(); refreshGarmin();
     } catch (e: unknown) {
       setSyncMsg(e instanceof Error ? e.message : "Sync failed");
     } finally {
@@ -60,6 +71,41 @@ export function DashboardScreen() {
   const noData = !dashLoading && dash && !dash.has_garmin_data;
   const m = dash?.metrics;
   const special = dash?.special_metrics ?? {};
+
+  const ageWindowLabel = ageWindow === "7d" ? "7-day average" : ageWindow === "30d" ? "30-day average" : "All-time average";
+  const fitnessAgeDisplay = dash?.age_windows?.fitness_age?.[ageWindow] ?? dash?.fitness_age ?? null;
+  const biologicalAgeDisplay = dash?.age_windows?.biological_age?.[ageWindow] ?? dash?.biological_age ?? null;
+  const fitnessAgeDelta = fitnessAgeDisplay !== null && fitnessAgeDisplay !== undefined ? roundOne(fitnessAgeDisplay - (dash?.actual_age ?? 0)) : null;
+  const biologicalAgeDelta = biologicalAgeDisplay !== null && biologicalAgeDisplay !== undefined ? roundOne(biologicalAgeDisplay - (dash?.actual_age ?? 0)) : null;
+
+  const syncWarning = garmin?.configured && garmin.is_stale ? "Data is stale - sync recommended" : null;
+  const latestHistoryImport = historyImport ?? garmin?.history_import ?? null;
+  const activeHistoryImport = latestHistoryImport && ["queued", "running"].includes(latestHistoryImport.status) ? latestHistoryImport : null;
+  const completedHistoryImport = !activeHistoryImport && latestHistoryImport?.status.startsWith("completed") ? latestHistoryImport : null;
+  const sustainedWatchMetrics = new Set(
+    (insights?.flags ?? [])
+      // A Watch marker is reserved for a persistent out-of-range pattern, not
+      // merely incomplete data or a single cautionary reading.
+      .filter((flag) => flag.severity === "watch" && flag.detail.includes("sustained pattern"))
+      .map((flag) => flag.metric),
+  );
+  const showMetricStatus = (metric: string, tone: FocusMetric["tone"] | null) =>
+    showMetric(metricFilter, tone, metric, sustainedWatchMetrics);
+  const hiddenCards = new Set(planningData?.settings.hidden_cards ?? []);
+  const homeMarkerStates: Array<[string, FocusMetric["tone"] | null]> = [
+    ["sleep_score", scoreTone(m?.sleep_score)],
+    ["rhr", rhrTone(m?.rhr)],
+    ["hrv", hrvTone(m?.hrv, m?.hrv_baseline)],
+    ["stress", stressTone(m?.stress)],
+    ["spo2", spo2Tone(m?.spo2)],
+    ["respiration", respirationTone(m?.respiration)],
+    ["body_battery", scoreTone(m?.body_battery)],
+    ["physiological_anomaly_load", specialTone(special.physiological_anomaly_load)],
+    ["training_gate", specialTone(special.training_gate)],
+  ];
+  const visibleHomeMarkerCount = homeMarkerStates.filter(([metric, tone]) =>
+    showMetricStatus(metric, tone),
+  ).length;
 
   useEffect(() => {
     if (!m) return;
@@ -83,22 +129,49 @@ export function DashboardScreen() {
   }, [dash?.profile?.name, dash?.profile?.date_of_birth, dash?.profile?.height_cm, m?.weight_kg, m?.body_fat_pct, m?.muscle_mass_kg, profileDirty]);
 
   useEffect(() => {
-    if (bootSynced.current || !garmin?.configured || syncing) return;
+    if (bootSynced.current || !garmin?.configured || syncing || (activeHistoryImport && ["queued", "running"].includes(activeHistoryImport.status))) return;
     if (selectedDate !== new Date().toISOString().slice(0, 10)) return;
     if (garmin.is_stale || !garmin.last_synced_at) {
       bootSynced.current = true;
       syncToday();
     }
-  }, [garmin?.configured, garmin?.is_stale, garmin?.last_synced_at, selectedDate, syncing]);
+  }, [garmin?.configured, garmin?.is_stale, garmin?.last_synced_at, selectedDate, syncing, activeHistoryImport?.status]);
 
   useEffect(() => {
-    if (!localStorage.getItem("forge_auth_token")) return;
+    if (garmin?.history_import && ["queued", "running"].includes(garmin.history_import.status)) {
+      setHistoryImport(garmin.history_import);
+    }
+  }, [garmin?.history_import]);
+
+  useEffect(() => {
+    if (!historyImport || !["queued", "running"].includes(historyImport.status)) return;
+    const id = window.setInterval(() => {
+      api.garminHistoryImport(historyImport.id)
+        .then((job) => {
+          setHistoryImport(job);
+          if (!["queued", "running"].includes(job.status)) {
+            setHistoryImport(null);
+            refreshDash(); refreshCoach(); refreshGarmin();
+          }
+        })
+        .catch((error: unknown) => setGarminMsg(error instanceof Error ? error.message : "Could not read history import progress."));
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [historyImport?.id, historyImport?.status, refreshDash, refreshCoach, refreshGarmin]);
+
+  useEffect(() => {
+    if (!localStorage.getItem("forge_auth_token")) {
+      setAuthResolved(true);
+      return;
+    }
     api.authMe()
       .then((payload) => setAuthUser(payload.user))
       .catch(() => {
         localStorage.removeItem("forge_auth_token");
         setAuthUser(null);
-      });
+        setSection("start");
+      })
+      .finally(() => setAuthResolved(true));
   }, []);
 
   useEffect(() => {
@@ -173,6 +246,9 @@ export function DashboardScreen() {
       });
       localStorage.setItem("forge_auth_token", payload.token);
       setAuthUser(payload.user);
+      setAuthResolved(true);
+      setSection("start");
+      refreshDash(); refreshCoach(); refreshGarmin();
       setAuthMsg("Account created. This browser is signed in.");
     } catch (e: unknown) {
       setAuthMsg(e instanceof Error ? e.message : "Signup failed");
@@ -186,6 +262,9 @@ export function DashboardScreen() {
       const payload = await api.authLogin({ email: authDraft.email, password: authDraft.password });
       localStorage.setItem("forge_auth_token", payload.token);
       setAuthUser(payload.user);
+      setAuthResolved(true);
+      setSection("start");
+      refreshDash(); refreshCoach(); refreshGarmin();
       setAuthMsg("Signed in.");
     } catch (e: unknown) {
       setAuthMsg(e instanceof Error ? e.message : "Login failed");
@@ -200,13 +279,127 @@ export function DashboardScreen() {
     }
     localStorage.removeItem("forge_auth_token");
     setAuthUser(null);
+    setAuthResolved(true);
+    setSection("start");
     setAuthMsg("Signed out.");
   };
+
+  const handleGarminConnect = async (event: FormEvent) => {
+    event.preventDefault();
+    setGarminMsg(null);
+    setGarminConnecting(true);
+    try {
+      const result = await api.connectGarmin(garminDraft);
+      if (result.status === "mfa_required" && result.challenge_id) {
+        setGarminMfaChallenge(result.challenge_id);
+        setGarminMsg(result.message);
+      } else {
+        setGarminMfaChallenge(null);
+        setGarminDraft({ email: "", password: "" });
+        setGarminMsg(result.message);
+        refreshGarmin();
+      }
+    } catch (error: unknown) {
+      setGarminMsg(error instanceof Error ? error.message : "Garmin connection failed.");
+    } finally {
+      setGarminConnecting(false);
+    }
+  };
+
+  const handleGarminMfa = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!garminMfaChallenge) return;
+    setGarminMsg(null);
+    setGarminConnecting(true);
+    try {
+      const result = await api.verifyGarminMfa({ challenge_id: garminMfaChallenge, code: garminMfaCode });
+      setGarminMfaChallenge(null);
+      setGarminMfaCode("");
+      setGarminDraft({ email: "", password: "" });
+      setGarminMsg(result.message);
+      refreshGarmin();
+    } catch (error: unknown) {
+      setGarminMsg(error instanceof Error ? error.message : "Garmin code verification failed.");
+    } finally {
+      setGarminConnecting(false);
+    }
+  };
+
+  const handleGarminHistoryImport = async () => {
+    setGarminMsg(null);
+    setGarminImporting(true);
+    try {
+      const job = await api.startGarminHistoryImport(365);
+      setHistoryImport(job);
+      setGarminMsg("History import started. You can continue using Forge while it fills your timeline.");
+    } catch (error: unknown) {
+      setGarminMsg(error instanceof Error ? error.message : "Garmin history import failed.");
+    } finally {
+      setGarminImporting(false);
+    }
+  };
+
+  const handleGarminDisconnect = async () => {
+    setGarminMsg(null);
+    setGarminConnecting(true);
+    try {
+      await api.disconnectGarmin();
+      setGarminMfaChallenge(null);
+      setGarminDraft({ email: "", password: "" });
+      setGarminMsg("Garmin disconnected from this Forge account.");
+      refreshGarmin(); refreshDash(); refreshCoach();
+    } catch (error: unknown) {
+      setGarminMsg(error instanceof Error ? error.message : "Garmin disconnect failed.");
+    } finally {
+      setGarminConnecting(false);
+    }
+  };
+
+  if (section === "start") {
+    return (
+      <main className="app app--entry">
+        {authUser ? (
+          <section className="card entry-hero">
+            <div>
+              <div className="card__label">Your Forge account</div>
+              <h2>Welcome back, {authUser.display_name}.</h2>
+              <p>Connect Garmin or manage your private health timeline before opening the dashboard.</p>
+            </div>
+            <div className="entry-hero__pill">Your data stays attached to this Forge account.</div>
+          </section>
+        ) : <WelcomeHero />}
+        <AuthSection
+          authUser={authUser}
+          authDraft={authDraft}
+          onAuthDraftChange={setAuthDraft}
+          onSignup={handleSignup}
+          onLogin={handleLogin}
+          onLogout={handleLogout}
+          onContinue={() => setSection("home")}
+          authMessage={authMsg}
+          garmin={garmin}
+          garminDraft={garminDraft}
+          onGarminDraftChange={setGarminDraft}
+          onGarminConnect={handleGarminConnect}
+          mfaChallenge={garminMfaChallenge}
+          mfaCode={garminMfaCode}
+          onMfaCodeChange={setGarminMfaCode}
+          onGarminMfa={handleGarminMfa}
+          garminMessage={garminMsg}
+          garminConnecting={garminConnecting}
+          onImportHistory={handleGarminHistoryImport}
+          garminImporting={garminImporting}
+          onDisconnectGarmin={handleGarminDisconnect}
+        />
+      </main>
+    );
+  }
 
   return (
     <main className="app">
       <Header
         date={dash?.active_date ?? selectedDate}
+        greetingName={dash?.profile?.name ?? authUser?.display_name}
         onPreviousDay={() => setSelectedDate(shiftDate(selectedDate, -1))}
         onNextDay={() => setSelectedDate(shiftDate(selectedDate, 1))}
         onToday={() => setSelectedDate(new Date().toISOString().slice(0, 10))}
@@ -220,12 +413,32 @@ export function DashboardScreen() {
           <span className="meta">{garmin?.configured ? `Garmin connected · ${garmin.email}${syncFreshness(garmin.last_sync_age_hours)}` : "Garmin not configured"}</span>
         </div>
         <div className="dash-syncbar__right">
+          {syncWarning && <span className="dash-syncbar__warn">{syncWarning}</span>}
+          {completedHistoryImport && <span className="dash-syncbar__msg">{completedHistoryImport.completed_days} days of history synced</span>}
           {syncMsg && <span className="dash-syncbar__msg">{syncMsg}</span>}
+          <button className="dash-syncbar__btn" onClick={handleGarminHistoryImport} disabled={garminImporting || !garmin?.configured}>
+            {activeHistoryImport && ["queued", "running"].includes(activeHistoryImport.status) ? "Importing history" : "Refresh 365 days"}
+          </button>
+          <button className="dash-syncbar__btn" onClick={handleLogout}>Sign out</button>
           <button className="dash-syncbar__btn" onClick={syncToday} disabled={syncing || !garmin?.configured}>
             {syncing ? "Syncing…" : "↻ Sync Garmin"}
           </button>
         </div>
       </div>
+
+      {activeHistoryImport && (
+        <section className="dash-history-job card" aria-live="polite">
+          <div>
+            <div className="card__label">Garmin history</div>
+            <strong>{activeHistoryImport.status === "completed" ? "History import complete." : activeHistoryImport.status === "failed" ? "History import needs attention." : "Building your health timeline."}</strong>
+            <span>{activeHistoryImport.completed_days} of {activeHistoryImport.total_days} days checked{activeHistoryImport.current_date ? ` · ${activeHistoryImport.current_date}` : ""}</span>
+          </div>
+          <div className="dash-history-job__progress" aria-label={`${activeHistoryImport.progress_pct}% complete`}>
+            <span style={{ width: `${activeHistoryImport.progress_pct}%` }} />
+          </div>
+          <small>{activeHistoryImport.synced_days} updated · {activeHistoryImport.skipped_days} unchanged · {activeHistoryImport.failed_days} failed{activeHistoryImport.error ? ` · ${activeHistoryImport.error}` : ""}</small>
+        </section>
+      )}
 
       <nav className="dash-floatnav" aria-label="Forge sections">
         {[
@@ -248,7 +461,14 @@ export function DashboardScreen() {
       </nav>
 
       {noData && garmin !== null ? (
-        <Onboarding garminConfigured={garmin?.configured ?? false} onSynced={refreshDash} />
+        <section className="dash-section card account-empty">
+          <div>
+            <div className="card__label">Account setup</div>
+            <h2>{garmin?.configured ? "Import Garmin history." : "Connect Garmin for this account."}</h2>
+            <p>{garmin?.configured ? "Your connection is ready. Start a sync to populate your private health timeline." : "Garmin data is linked to the signed-in Forge account, never to a shared local profile."}</p>
+          </div>
+          <button type="button" onClick={() => setSection("start")}>Manage Garmin connection</button>
+        </section>
       ) : (
         <>
           {/* Drill-down overlay */}
@@ -265,7 +485,7 @@ export function DashboardScreen() {
           )}
 
           {/* Insights and flags */}
-          {section === "home" && insights && (
+          {section === "home" && insights && !hiddenCards.has("home_patterns") && (
             <section className="dash-section dash-intel">
               <div className="dash-intel__panel card">
                 <div className="dash-intel__head">
@@ -296,7 +516,7 @@ export function DashboardScreen() {
                   </div>
                 </div>
                 <div className="dash-intel__list">
-                  {insights.patterns.slice(0, 3).map((pattern) => (
+                  {insights.patterns.filter((pattern) => !isSleepPattern(pattern)).slice(0, 3).map((pattern) => (
                     <button
                       key={pattern.id ?? pattern.title}
                       className="dash-intel__item"
@@ -312,48 +532,78 @@ export function DashboardScreen() {
           )}
 
           {/* Age heroes */}
-          {section === "home" && <section className="dash-section dash-ages">
-            <AgeCard
-              kind="fitness"
-              age={dash?.fitness_age ?? null}
-              actualAge={dash?.actual_age ?? 30}
-              delta={dash?.fitness_age_delta ?? null}
-              status={dash?.fitness_age_status ?? null}
-              drivers={dash?.fitness_age_drivers ?? []}
-              onClick={() => drill("fitness_age", "Fitness Age", "#6BE3A4", "yrs")}
-            />
-            <AgeCard
-              kind="biological"
-              age={dash?.biological_age ?? null}
-              actualAge={dash?.actual_age ?? 30}
-              delta={dash?.biological_age_delta ?? null}
-              status={dash?.biological_age_status ?? null}
-              drivers={dash?.biological_age_drivers ?? []}
-              onClick={() => drill("biological_age", "Biological Age", "#8F7CFF", "yrs")}
-            />
+          {section === "home" && !hiddenCards.has("home_ages") && <section className="dash-section">
+            <div className="age-window-toggle" role="tablist" aria-label="Age time window">
+              {(["7d", "30d", "all"] as AgeWindow[]).map((window) => (
+                <button
+                  key={window}
+                  type="button"
+                  className={ageWindow === window ? "age-window-toggle__btn age-window-toggle__btn--active" : "age-window-toggle__btn"}
+                  onClick={() => setAgeWindow(window)}
+                >
+                  {window.toUpperCase()}
+                </button>
+              ))}
+            </div>
+            <div className="dash-ages">
+              <AgeCard
+                kind="fitness"
+                age={fitnessAgeDisplay}
+                actualAge={dash?.actual_age ?? 30}
+                delta={fitnessAgeDelta}
+                status={ageStatus(fitnessAgeDelta)}
+                drivers={dash?.fitness_age_drivers ?? []}
+                periodLabel={ageWindowLabel}
+                onClick={() => drill("fitness_age", "Fitness Age", "#6BE3A4", "yrs")}
+              />
+              <AgeCard
+                kind="biological"
+                age={biologicalAgeDisplay}
+                actualAge={dash?.actual_age ?? 30}
+                delta={biologicalAgeDelta}
+                status={ageStatus(biologicalAgeDelta)}
+                drivers={dash?.biological_age_drivers ?? []}
+                periodLabel={ageWindowLabel}
+                onClick={() => drill("biological_age", "Biological Age", "#8F7CFF", "yrs")}
+              />
+            </div>
           </section>}
 
           {/* Rings */}
-          {section === "home" && dash && <section className="dash-section"><HealthRings rings={dash.rings} /></section>}
+          {section === "home" && dash && !hiddenCards.has("home_rings") && <section className="dash-section"><HealthRings rings={dash.rings} /></section>}
 
           {/* Decision-first metrics */}
           {section === "home" && (
             <>
-              <section className="dash-section">
+              {!hiddenCards.has("home_coach") && <section className="dash-section">
                 <SectionCoach data={coach} dashboard={dash} focus="home" loadError={coachError} onRefresh={refreshCoach} />
-              </section>
-              <MetricFilterBar value={metricFilter} onChange={setMetricFilter} />
+              </section>}
+              {!hiddenCards.has("fitness_nutrition") && planningData && (
+                <section className="dash-section"><NutritionPlanner plan={planningData.nutrition} /></section>
+              )}
+              {!hiddenCards.has("home_markers") && <><MetricFilterBar value={metricFilter} onChange={setMetricFilter} />
               <section className="dash-section dash-ranges">
-                {showMetric(metricFilter, scoreTone(m?.sleep_score)) && <RangeMarkerCard label="Sleep Score" value={m?.sleep_score} min={0} max={100} normalLow={75} normalHigh={100} mode="higher" help="Sleep quality and debt context." onClick={() => drill("sleep_score","Sleep Score","#8F7CFF","")} />}
-                {showMetric(metricFilter, rhrTone(m?.rhr)) && <RangeMarkerCard label="Resting HR" value={m?.rhr} unit="bpm" min={40} max={95} normalLow={45} normalHigh={62} mode="lower" help={m?.rhr_baseline ? `Baseline ${m.rhr_baseline} bpm.` : "Lower usually means less strain."} onClick={() => drill("rhr","Resting HR","#FF6B6B","bpm")} />}
-                {showMetric(metricFilter, hrvTone(m?.hrv, m?.hrv_baseline)) && <RangeMarkerCard label="HRV" value={m?.hrv} unit="ms" min={15} max={110} normalLow={m?.hrv_baseline ? m.hrv_baseline * 0.9 : 45} normalHigh={m?.hrv_baseline ? m.hrv_baseline * 1.25 : 85} mode="range" help={m?.hrv_baseline ? `Baseline ${m.hrv_baseline} ms.` : "Autonomic balance."} onClick={() => drill("hrv","HRV","#62E6D0","ms")} />}
-                {showMetric(metricFilter, stressTone(m?.stress)) && <RangeMarkerCard label="Stress" value={m?.stress} min={0} max={100} normalLow={0} normalHigh={30} mode="lower" help="Lower daytime stress is better." onClick={() => drill("stress","Stress","#F2C063","")} />}
-                {showMetric(metricFilter, spo2Tone(m?.spo2)) && <RangeMarkerCard label="SpO2" value={m?.spo2} unit="%" min={88} max={100} normalLow={95} normalHigh={100} mode="higher" help="Oxygen saturation." onClick={() => drill("spo2","SpO2","#5DADEC","%")} />}
-                {showMetric(metricFilter, respirationTone(m?.respiration)) && <RangeMarkerCard label="Respiration" value={m?.respiration} unit="brpm" min={8} max={24} normalLow={11} normalHigh={17} mode="range" help="Stable is better than high variability." onClick={() => drill("respiration","Respiration","#62E6D0","brpm")} />}
-                {showMetric(metricFilter, scoreTone(m?.body_battery)) && <RangeMarkerCard label="Body Battery" value={m?.body_battery} unit="%" min={0} max={100} normalLow={60} normalHigh={100} mode="higher" help="Energy reserve." onClick={() => drill("body_battery","Body Battery","#6BE3A4","%")} />}
-                {showMetric(metricFilter, specialTone(special.physiological_anomaly_load)) && <RangeMarkerCard label="Physiology Stability" value={specialScore(special.physiological_anomaly_load)} unit="%" min={0} max={100} normalLow={75} normalHigh={100} mode="higher" help={specialSummary(special.physiological_anomaly_load, "Unusual HRV, RHR, stress, respiration, SpO2, and body battery signals.")} />}
-                {showMetric(metricFilter, specialTone(special.training_gate)) && <RangeMarkerCard label="Training Gate" value={specialScore(special.training_gate)} unit="%" min={0} max={100} normalLow={58} normalHigh={100} mode="higher" help={specialSummary(special.training_gate, "Readiness gate for today's training intensity.")} />}
-              </section>
+                {showMetricStatus("sleep_score", scoreTone(m?.sleep_score)) && <RangeMarkerCard label="Sleep Score" value={m?.sleep_score} min={0} max={100} normalLow={75} normalHigh={100} mode="higher" help="Sleep quality and debt context." onClick={() => drill("sleep_score","Sleep Score","#8F7CFF","")} />}
+                {showMetricStatus("rhr", rhrTone(m?.rhr)) && <RangeMarkerCard label="Resting HR" value={m?.rhr} unit="bpm" min={40} max={95} normalLow={45} normalHigh={62} mode="lower" help={m?.rhr_baseline ? `Baseline ${m.rhr_baseline} bpm.` : "Lower usually means less strain."} onClick={() => drill("rhr","Resting HR","#FF6B6B","bpm")} />}
+                {showMetricStatus("hrv", hrvTone(m?.hrv, m?.hrv_baseline)) && <RangeMarkerCard label="HRV" value={m?.hrv} unit="ms" min={15} max={110} normalLow={m?.hrv_baseline ? m.hrv_baseline * 0.9 : 45} normalHigh={m?.hrv_baseline ? m.hrv_baseline * 1.25 : 85} mode="range" help={m?.hrv_baseline ? `Baseline ${m.hrv_baseline} ms.` : "Autonomic balance."} onClick={() => drill("hrv","HRV","#62E6D0","ms")} />}
+                {showMetricStatus("stress", stressTone(m?.stress)) && <RangeMarkerCard label="Stress" value={m?.stress} min={0} max={100} normalLow={0} normalHigh={30} mode="lower" help="Lower daytime stress is better." onClick={() => drill("stress","Stress","#F2C063","")} />}
+                {showMetricStatus("spo2", spo2Tone(m?.spo2)) && <RangeMarkerCard label="SpO2" value={m?.spo2} unit="%" min={88} max={100} normalLow={95} normalHigh={100} mode="higher" help="Oxygen saturation." onClick={() => drill("spo2","SpO2","#5DADEC","%")} />}
+                {showMetricStatus("respiration", respirationTone(m?.respiration)) && <RangeMarkerCard label="Respiration" value={m?.respiration} unit="brpm" min={8} max={24} normalLow={11} normalHigh={17} mode="range" help="Stable is better than high variability." onClick={() => drill("respiration","Respiration","#62E6D0","brpm")} />}
+                {showMetricStatus("body_battery", scoreTone(m?.body_battery)) && <RangeMarkerCard label="Body Battery" value={m?.body_battery} unit="%" min={0} max={100} normalLow={60} normalHigh={100} mode="higher" help="Energy reserve." onClick={() => drill("body_battery","Body Battery","#6BE3A4","%")} />}
+                {showMetricStatus("physiological_anomaly_load", specialTone(special.physiological_anomaly_load)) && <RangeMarkerCard label="Physiology Stability" value={specialScore(special.physiological_anomaly_load)} unit="%" min={0} max={100} normalLow={75} normalHigh={100} mode="higher" help={specialSummary(special.physiological_anomaly_load, "Unusual HRV, RHR, stress, respiration, SpO2, and body battery signals.")} onClick={() => drill(specialMetricTarget("physiological_anomaly_load").key, specialMetricTarget("physiological_anomaly_load").label, specialMetricTarget("physiological_anomaly_load").color, specialMetricTarget("physiological_anomaly_load").unit)} />}
+                {showMetricStatus("training_gate", specialTone(special.training_gate)) && <RangeMarkerCard label="Training Gate" value={specialScore(special.training_gate)} unit="%" min={0} max={100} normalLow={58} normalHigh={100} mode="higher" help={specialSummary(special.training_gate, "Readiness gate for today's training intensity.")} onClick={() => drill(specialMetricTarget("training_gate").key, specialMetricTarget("training_gate").label, specialMetricTarget("training_gate").color, specialMetricTarget("training_gate").unit)} />}
+                {visibleHomeMarkerCount === 0 && (
+                  <div className="metric-filter__empty">
+                    {metricFilter === "watch"
+                      ? "No metric has been outside target often enough to count as a sustained watch item."
+                      : metricFilter === "poor"
+                        ? "No current poor markers."
+                        : metricFilter === "good"
+                          ? "No in-range markers are available for this day."
+                          : "No markers match this filter."}
+                  </div>
+                )}
+              </section></>}
             </>
           )}
 
@@ -376,9 +626,9 @@ export function DashboardScreen() {
                 <RangeMarkerCard label="Load Balance" value={m?.load_balance} min={0} max={2} normalLow={0.8} normalHigh={1.3} mode="target" help="Acute load vs longer baseline." onClick={() => drill("load_balance","Load Balance","#F2C063","")} />
                 <RangeMarkerCard label="HR Recovery" value={m?.hr_recovery} unit="bpm" min={0} max={80} normalLow={25} normalHigh={80} mode="higher" help="Drop after hard work." onClick={() => drill("hr_recovery","HR Recovery","#62E6D0","bpm")} />
                 <RangeMarkerCard label="Active Minutes" value={m?.active_minutes} unit="min" min={0} max={180} normalLow={25} normalHigh={90} mode="target" help="Daily movement dose." onClick={() => drill("active_minutes","Active Minutes","#5DADEC","min")} />
-                <RangeMarkerCard label="Training Gate" value={specialScore(special.training_gate)} unit="%" min={0} max={100} normalLow={58} normalHigh={100} mode="higher" help={specialSummary(special.training_gate, "Today's training-intensity gate from recovery, sleep, HRV, RHR, and stress.")} />
-                <RangeMarkerCard label="Resilience Ratio" value={specialScore(special.resilience_ratio)} unit="%" min={0} max={100} normalLow={70} normalHigh={100} mode="higher" help={specialSummary(special.resilience_ratio, "How well next-day recovery holds after strain.")} />
-                <RangeMarkerCard label="Training Monotony" value={specialNumber(special.training_monotony)} min={0} max={3} normalLow={0.8} normalHigh={1.8} mode="target" help={specialSummary(special.training_monotony, "Load sameness across the last 7 days.")} />
+                <RangeMarkerCard label="Training Gate" value={specialScore(special.training_gate)} unit="%" min={0} max={100} normalLow={58} normalHigh={100} mode="higher" help={specialSummary(special.training_gate, "Today's training-intensity gate from recovery, sleep, HRV, RHR, and stress.")} onClick={() => drill(specialMetricTarget("training_gate").key, specialMetricTarget("training_gate").label, specialMetricTarget("training_gate").color, specialMetricTarget("training_gate").unit)} />
+                <RangeMarkerCard label="Resilience Ratio" value={specialScore(special.resilience_ratio)} unit="%" min={0} max={100} normalLow={70} normalHigh={100} mode="higher" help={specialSummary(special.resilience_ratio, "How well next-day recovery holds after strain.")} onClick={() => drill(specialMetricTarget("resilience_ratio").key, specialMetricTarget("resilience_ratio").label, specialMetricTarget("resilience_ratio").color, specialMetricTarget("resilience_ratio").unit)} />
+                <RangeMarkerCard label="Training Monotony" value={specialNumber(special.training_monotony)} min={0} max={3} normalLow={0.8} normalHigh={1.8} mode="target" help={specialSummary(special.training_monotony, "Load sameness across the last 7 days.")} onClick={() => drill(specialMetricTarget("training_monotony").key, specialMetricTarget("training_monotony").label, specialMetricTarget("training_monotony").color, specialMetricTarget("training_monotony").unit)} />
               </section>
               <section className="dash-section dash-discipline-grid">
                 {buildDisciplineCards(fitnessSeries).map((card) => (
@@ -396,6 +646,10 @@ export function DashboardScreen() {
                   </div>
                 ))}
               </section>
+              {!hiddenCards.has("fitness_forecasts") && planningData && (
+                <section className="dash-section"><FitnessForecastPanel data={planningData.predictions} /></section>
+              )}
+              {insights && <PatternPanel title="Training patterns" subtitle="Workout timing, intensity, load, and following recovery." patterns={insights.patterns.filter(isFitnessPattern)} onDrill={drill} />}
             </>
           )}
 
@@ -436,6 +690,7 @@ export function DashboardScreen() {
                 <RangeMarkerCard label="Physiology Stability" value={specialScore(special.physiological_anomaly_load)} unit="%" min={0} max={100} normalLow={75} normalHigh={100} mode="higher" help={specialSummary(special.physiological_anomaly_load, "Multi-signal anomaly load versus baseline.")} />
                 <RangeMarkerCard label="Respiratory Stability" value={specialScore(special.respiratory_stability_sleep)} unit="%" min={0} max={100} normalLow={78} normalHigh={100} mode="higher" help={specialSummary(special.respiratory_stability_sleep, "Breathing and SpO2 stability against recent baseline.")} />
               </section>
+              {insights && <PatternPanel title="Physiology patterns" subtitle="Stress, recovery, HRV, and other long-term biological relationships." patterns={insights.patterns.filter(isBiologyPattern)} onDrill={drill} />}
             </>
           )}
 
@@ -451,31 +706,18 @@ export function DashboardScreen() {
                 <RangeMarkerCard label="Sleep Need" value={m?.sleep_need_hours} unit="h" min={6} max={10} normalLow={7} normalHigh={8.5} mode="range" help="Based on debt and recent strain." onClick={() => drill("sleep_need","Sleep Need","#8F7CFF","h")} />
                 <RangeMarkerCard label="Deep Sleep" value={m?.deep_sleep_hours} unit="h" min={0} max={3} normalLow={1} normalHigh={2.2} mode="range" help="Restorative sleep stage." onClick={() => drill("deep_sleep","Deep Sleep","#8F7CFF","h")} />
                 <RangeMarkerCard label="REM Sleep" value={m?.rem_sleep_hours} unit="h" min={0} max={3} normalLow={1.2} normalHigh={2.3} mode="range" help="Cognitive recovery stage." onClick={() => drill("rem_sleep","REM Sleep","#A7B0FF","h")} />
-                <RangeMarkerCard label="Sleep Regularity" value={specialScore(special.sleep_regularity)} unit="%" min={0} max={100} normalLow={75} normalHigh={100} mode="higher" help={specialSummary(special.sleep_regularity, "Night-to-night bedtime and wake-time stability.")} />
-                <RangeMarkerCard label="Social Jetlag" value={specialNumber(special.social_jetlag)} unit="h" min={0} max={3} normalLow={0} normalHigh={0.7} mode="lower" help={specialSummary(special.social_jetlag, "Weekday versus weekend midsleep drift.")} />
-                <RangeMarkerCard label="Sleep Architecture" value={specialScore(special.sleep_architecture_confidence)} unit="%" min={0} max={100} normalLow={80} normalHigh={100} mode="higher" help={specialSummary(special.sleep_architecture_confidence, "Confidence that sleep-stage data is complete enough to interpret.")} />
-                <RangeMarkerCard label="Respiratory Stability" value={specialScore(special.respiratory_stability_sleep)} unit="%" min={0} max={100} normalLow={78} normalHigh={100} mode="higher" help={specialSummary(special.respiratory_stability_sleep, "Breathing and oxygen stability during recovery.")} />
+                <RangeMarkerCard label="Sleep Regularity" value={specialScore(special.sleep_regularity)} unit="%" min={0} max={100} normalLow={75} normalHigh={100} mode="higher" help={specialSummary(special.sleep_regularity, "Night-to-night bedtime and wake-time stability.")} onClick={() => drill(specialMetricTarget("sleep_regularity").key, specialMetricTarget("sleep_regularity").label, specialMetricTarget("sleep_regularity").color, specialMetricTarget("sleep_regularity").unit)} />
+                <RangeMarkerCard label="Social Jetlag" value={specialNumber(special.social_jetlag)} unit="h" min={0} max={3} normalLow={0} normalHigh={0.7} mode="lower" help={specialSummary(special.social_jetlag, "Weekday versus weekend midsleep drift.")} onClick={() => drill(specialMetricTarget("social_jetlag").key, specialMetricTarget("social_jetlag").label, specialMetricTarget("social_jetlag").color, specialMetricTarget("social_jetlag").unit)} />
+                <RangeMarkerCard label="Sleep Architecture" value={specialScore(special.sleep_architecture_confidence)} unit="%" min={0} max={100} normalLow={80} normalHigh={100} mode="higher" help={specialSummary(special.sleep_architecture_confidence, "Confidence that sleep-stage data is complete enough to interpret.")} onClick={() => drill(specialMetricTarget("sleep_architecture_confidence").key, specialMetricTarget("sleep_architecture_confidence").label, specialMetricTarget("sleep_architecture_confidence").color, specialMetricTarget("sleep_architecture_confidence").unit)} />
+                <RangeMarkerCard label="Respiratory Stability" value={specialScore(special.respiratory_stability_sleep)} unit="%" min={0} max={100} normalLow={78} normalHigh={100} mode="higher" help={specialSummary(special.respiratory_stability_sleep, "Breathing and oxygen stability during recovery.")} onClick={() => drill(specialMetricTarget("respiratory_stability_sleep").key, specialMetricTarget("respiratory_stability_sleep").label, specialMetricTarget("respiratory_stability_sleep").color, specialMetricTarget("respiratory_stability_sleep").unit)} />
               </section>
-              {insights && (
-                <section className="dash-section dash-intel">
-                  <div className="dash-intel__panel card">
-                    <div className="dash-intel__head">
-                      <div>
-                        <div className="card__label">Sleep patterns</div>
-                        <div className="dash-intel__sub">Bedtime, strain, stress, and next-day recovery links.</div>
-                      </div>
-                    </div>
-                    <div className="dash-intel__list">
-                      {insights.patterns.filter((pattern) => pattern.metric.includes("sleep") || pattern.title.toLowerCase().includes("sleep")).slice(0, 4).map((pattern) => (
-                        <button key={pattern.id ?? pattern.title} className="dash-intel__item" onClick={() => drill(pattern.metric, labelForMetric(pattern.metric), colorForMetric(pattern.metric), unitForMetric(pattern.metric))}>
-                          <strong>{pattern.title}</strong>
-                          <span>{pattern.summary}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </section>
+              {!hiddenCards.has("sleep_schedule") && planningData && (
+                <section className="dash-section"><SleepSchedulePanel data={planningData.sleep} /></section>
               )}
+              {!hiddenCards.has("sleep_explorer") && authenticated && (
+                <section className="dash-section"><SleepExplorerPanel date={selectedDate} /></section>
+              )}
+              {insights && <PatternPanel title="Sleep patterns" subtitle="Your ideal timing, duration, architecture, debt, and sleep-linked training relationships." patterns={insights.patterns.filter(isSleepPattern)} onDrill={drill} />}
             </>
           )}
 
@@ -489,24 +731,27 @@ export function DashboardScreen() {
           )}
 
           {section === "profile" && (
-            <ProfileSection
-              dashboard={dash}
-              garminEmail={garmin?.email ?? null}
-              draft={profileDraft}
-              onDraftChange={(next) => {
-                setProfileDirty(true);
-                setProfileDraft(next);
-              }}
-              onSave={saveProfile}
-              message={profileMsg}
-              authUser={authUser}
-              authDraft={authDraft}
-              onAuthDraftChange={setAuthDraft}
-              onSignup={handleSignup}
-              onLogin={handleLogin}
-              onLogout={handleLogout}
-              authMessage={authMsg}
-            />
+            <>
+              <ProfileSection
+                dashboard={dash}
+                garminEmail={garmin?.email ?? null}
+                draft={profileDraft}
+                onDraftChange={(next) => {
+                  setProfileDirty(true);
+                  setProfileDraft(next);
+                }}
+                onSave={saveProfile}
+                message={profileMsg}
+                authUser={authUser}
+                authDraft={authDraft}
+                onAuthDraftChange={setAuthDraft}
+                onSignup={handleSignup}
+                onLogin={handleLogin}
+                onLogout={handleLogout}
+                authMessage={authMsg}
+              />
+              {planningData && <PlannerSettingsPanel settings={planningData.settings} onSave={async (next) => { await api.updatePlanning(next); refreshPlanning(); }} />}
+            </>
           )}
 
           {/* Expandable detail groups */}
@@ -625,6 +870,160 @@ export function DashboardScreen() {
     </main>
   );
 }
+const WELCOME_LINES = [
+  "Creating a clearer you.",
+  "Finding what works for you.",
+  "Turning data into decisions.",
+  "Building a stronger baseline.",
+];
+
+function WelcomeHero() {
+  const [lineIndex, setLineIndex] = useState(0);
+  const [visible, setVisible] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const target = WELCOME_LINES[lineIndex];
+
+  useEffect(() => {
+    const complete = visible === target;
+    const empty = visible.length === 0;
+    const delay = complete ? 1500 : deleting ? 35 : 68;
+    const timer = window.setTimeout(() => {
+      if (!deleting && !complete) setVisible(target.slice(0, visible.length + 1));
+      else if (!deleting && complete) setDeleting(true);
+      else if (deleting && !empty) setVisible(target.slice(0, visible.length - 1));
+      else {
+        setDeleting(false);
+        setLineIndex((current) => (current + 1) % WELCOME_LINES.length);
+      }
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [visible, deleting, target]);
+
+  return (
+    <section className="welcome-hero" aria-label="Welcome to Forge">
+      <div className="welcome-hero__glow" />
+      <div className="welcome-hero__word">FORGE</div>
+      <p className="welcome-hero__type">{visible}<span aria-hidden="true">|</span></p>
+      <p className="welcome-hero__copy">Your private health command centre. Start with an account, then connect the data that makes it personal.</p>
+    </section>
+  );
+}
+
+function NutritionPlanner({ plan }: { plan: NutritionPlan }) {
+  return (
+    <section className="planner-card card">
+      <div className="planner-card__head">
+        <div><div className="card__label">Fuel plan</div><h2>Protein and energy for today.</h2></div>
+        <span className={`planner-confidence planner-confidence--${plan.confidence}`}>{plan.confidence} confidence</span>
+      </div>
+      {plan.status === "ready" && plan.protein_g && plan.energy_kcal ? (
+        <div className="planner-stats">
+          <div><span>Protein</span><strong>{plan.protein_g.low}–{plan.protein_g.high} g</strong><small>{plan.protein_g.midpoint} g midpoint</small></div>
+          <div><span>Energy estimate</span><strong>{plan.energy_kcal.estimate.toLocaleString()} kcal</strong><small>BMR {plan.energy_kcal.bmr.toLocaleString()} + activity {plan.energy_kcal.activity_kcal.toLocaleString()}</small></div>
+          <div><span>Goal</span><strong>{titleCase(plan.goal.replace("_", " "))}</strong><small>{plan.today_activity?.label ?? "No activity signal"}</small></div>
+        </div>
+      ) : <p className="planner-empty">{plan.title ?? "Add profile information to calculate a fuel range."}</p>}
+      <p className="planner-note">{plan.notes[0]}</p>
+    </section>
+  );
+}
+
+function SleepSchedulePanel({ data }: { data: SleepSchedule }) {
+  return (
+    <section className="planner-card card">
+      <div className="planner-card__head">
+        <div><div className="card__label">Personal sleep timing</div><h2>Plan around the nights that work best for you.</h2></div>
+        <span className={`planner-confidence planner-confidence--${data.confidence}`}>{data.sample_nights} nights</span>
+      </div>
+      <div className="planner-stats">
+        <div><span>Ideal bedtime</span><strong>{data.ideal_bedtime ?? "—"}</strong><small>Top-scoring nights</small></div>
+        <div><span>Ideal wake time</span><strong>{data.ideal_wake_time ?? "—"}</strong><small>Top-scoring nights</small></div>
+        <div><span>Wind-down starts</span><strong>{data.wind_down_start ?? "—"}</strong><small>For {data.target_bedtime ?? "your target bedtime"}</small></div>
+      </div>
+      <p className="planner-note">{data.status === "ready" ? data.notes[0] : "Forge needs more nights with recorded sleep timing before it can personalise this safely."}</p>
+    </section>
+  );
+}
+
+function FitnessForecastPanel({ data }: { data: FitnessPredictions }) {
+  const render = (label: string, items: FitnessPredictions["running"]) => (
+    <div className="forecast-group"><span>{label}</span><div>{items.map((item) => (
+      <article key={item.distance_km}>
+        <small>{item.distance_km >= 21 ? `${item.distance_km.toFixed(item.distance_km > 30 ? 0 : 1)} km` : `${item.distance_km} km`}</small>
+        <strong>{item.estimate_seconds ? formatRaceTime(item.estimate_seconds) : "Need more data"}</strong>
+        <em>{item.range_seconds ? `${formatRaceTime(item.range_seconds[0])}–${formatRaceTime(item.range_seconds[1])}` : "Comparable sessions required"}</em>
+      </article>
+    ))}</div></div>
+  );
+  return (
+    <section className="planner-card card">
+      <div className="planner-card__head"><div><div className="card__label">Race outlook</div><h2>Forecast ranges from your last 90 days.</h2></div><span className="planner-confidence planner-confidence--medium">Planning estimate</span></div>
+      <div className="forecast-grid">{render("Running", data.running)}{render("Cycling", data.cycling)}</div>
+      <div className="planner-scenario"><strong>{data.scenario.title}</strong><span>{data.scenario.detail}</span></div>
+      {data.scenario.improvement && <div className="forecast-scenarios"><div><span>Six-week consistency scenario</span><strong>{data.scenario.improvement.change_pct[0]}–{data.scenario.improvement.change_pct[1]}% faster planning range</strong><small>{data.scenario.improvement.condition}</small></div><div><span>No-training scenario</span><strong>{Math.abs(data.scenario.decline?.change_pct[1] ?? 0)}–{Math.abs(data.scenario.decline?.change_pct[0] ?? 0)}% slower planning range</strong><small>{data.scenario.decline?.condition}</small></div></div>}
+      <p className="planner-note">{data.notes[0]}</p>
+    </section>
+  );
+}
+
+function SleepExplorerPanel({ date }: { date: string }) {
+  const [bedtimeFrom, setBedtimeFrom] = useState("22:00");
+  const [bedtimeTo, setBedtimeTo] = useState("23:59");
+  const [activityKind, setActivityKind] = useState("");
+  const [data, setData] = useState<Awaited<ReturnType<typeof api.sleepExplorer>> | null>(null);
+  const [loading, setLoading] = useState(false);
+  const load = async () => {
+    setLoading(true);
+    try { setData(await api.sleepExplorer({ days: 90, bedtime_from: bedtimeFrom, bedtime_to: bedtimeTo, activity_kind: activityKind || undefined, date })); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { load(); }, [date]); // Initial view and date navigation.
+  return (
+    <section className="planner-card card sleep-explorer">
+      <div className="planner-card__head"><div><div className="card__label">Sleep correlation explorer</div><h2>Test your own timing and workout patterns.</h2></div>{data && <span className={`planner-confidence planner-confidence--${data.summary.confidence}`}>{data.summary.nights} matched nights</span>}</div>
+      <form onSubmit={(event) => { event.preventDefault(); load(); }} className="sleep-explorer__filters">
+        <label>Bedtime from<input type="time" value={bedtimeFrom} onChange={(event) => setBedtimeFrom(event.target.value)} /></label>
+        <label>to<input type="time" value={bedtimeTo} onChange={(event) => setBedtimeTo(event.target.value)} /></label>
+        <label>Prior workout<select value={activityKind} onChange={(event) => setActivityKind(event.target.value)}><option value="">Any activity</option><option value="running">Running</option><option value="cycling">Cycling</option><option value="strength">Strength</option><option value="other">Other</option></select></label>
+        <button type="submit" disabled={loading}>{loading ? "Checking…" : "Apply filters"}</button>
+      </form>
+      {data && <>
+        <div className="sleep-explorer__summary"><strong>{data.summary.average_sleep_score ?? "—"}</strong><span>Average Sleep Score across {data.summary.nights} matching nights.</span></div>
+        <div className="sleep-explorer__points">{data.points.slice(-10).map((point) => <div key={point.date} title={`${point.date}: Sleep Score ${point.sleep_score ?? "no data"}`}><i style={{ height: `${Math.max(8, point.sleep_score ?? 0)}%` }} /><span>{point.date.slice(5)}</span></div>)}</div>
+      </>}
+      <p className="planner-note">This compares association, not cause. Forge shows sample size so one or two unusually good nights do not become a recommendation.</p>
+    </section>
+  );
+}
+
+function PlannerSettingsPanel({ settings, onSave }: { settings: PlanningSettings; onSave: (next: Partial<PlanningSettings>) => Promise<void> }) {
+  const [draft, setDraft] = useState(settings);
+  const [message, setMessage] = useState<string | null>(null);
+  useEffect(() => setDraft(settings), [settings]);
+  const toggle = (card: string) => setDraft((current) => ({ ...current, hidden_cards: current.hidden_cards.includes(card) ? current.hidden_cards.filter((item) => item !== card) : [...current.hidden_cards, card] }));
+  return (
+    <section className="dash-section planner-settings card">
+      <div><div className="card__label">Planning preferences</div><h2>Set your goal, schedule, and dashboard modules.</h2><p>Hidden cards stay available to Forge flags and coaching when a signal needs attention.</p></div>
+      <form onSubmit={async (event) => { event.preventDefault(); await onSave(draft); setMessage("Planning preferences saved."); }}>
+        <label>Primary goal<select value={draft.body_goal} onChange={(event) => setDraft({ ...draft, body_goal: event.target.value as PlanningSettings["body_goal"] })}><option value="maintain">Maintain</option><option value="lose_weight">Lose weight</option><option value="gain_weight">Gain weight</option><option value="gain_muscle">Gain muscle</option><option value="lose_fat">Lose fat</option></select></label>
+        <label>Work starts<input type="time" value={draft.work_start ?? ""} onChange={(event) => setDraft({ ...draft, work_start: event.target.value || null })} /></label>
+        <label>Work ends<input type="time" value={draft.work_end ?? ""} onChange={(event) => setDraft({ ...draft, work_end: event.target.value || null })} /></label>
+        <label>Commute min<input type="number" min="0" max="240" value={draft.commute_minutes ?? ""} onChange={(event) => setDraft({ ...draft, commute_minutes: event.target.value ? Number(event.target.value) : null })} /></label>
+        <label>Preferred wake<input type="time" value={draft.preferred_wake ?? ""} onChange={(event) => setDraft({ ...draft, preferred_wake: event.target.value || null })} /></label>
+        <label>Sleep goal h<input type="number" min="5" max="10" step="0.25" value={draft.desired_sleep_hours} onChange={(event) => setDraft({ ...draft, desired_sleep_hours: Number(event.target.value) })} /></label>
+        <fieldset><legend>Dashboard modules</legend>{draft.available_cards.map((card) => <label key={card} className="planner-settings__toggle"><input type="checkbox" checked={!draft.hidden_cards.includes(card)} onChange={() => toggle(card)} />{titleCase(card.replace(/_/g, " "))}</label>)}</fieldset>
+        <button type="submit">Save planning</button>{message && <em>{message}</em>}
+      </form>
+    </section>
+  );
+}
+
+function formatRaceTime(seconds: number) {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remaining = Math.round(seconds % 60);
+  return hours ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remaining).padStart(2, "0")}` : `${minutes}:${String(remaining).padStart(2, "0")}`;
+}
 
 function MetricFilterBar({ value, onChange }: { value: MetricFilter; onChange: (next: MetricFilter) => void }) {
   const items: { key: MetricFilter; label: string }[] = [
@@ -636,7 +1035,7 @@ function MetricFilterBar({ value, onChange }: { value: MetricFilter; onChange: (
   ];
   return (
     <section className="dash-section metric-filter" aria-label="Metric status filter">
-      <span>Filter markers</span>
+      <span>{value === "watch" ? "Sustained concern" : value === "poor" ? "Current poor markers" : value === "good" ? "Current in-range markers" : "Filter markers"}</span>
       <div>
         {items.map((item) => (
           <button
@@ -930,57 +1329,146 @@ function ProfileSection({
         </form>
       </section>
 
-      <section className="dash-section account-panel card">
-        <div>
-          <div className="card__label">Account foundation</div>
-          <h2>{authUser ? "Signed in account." : "Create or connect a Forge account."}</h2>
-          <p>
-            This is the first production step toward secure profiles, per-user Garmin/Apple Health connections, and private metric storage.
-            The current dashboard remains local-single-user until metric tables are migrated to user scope.
-          </p>
-        </div>
-        {authUser ? (
-          <div className="account-panel__session">
-            <span>Signed in as</span>
-            <strong>{authUser.display_name}</strong>
-            <small>{authUser.email}</small>
-            <button type="button" onClick={onLogout}>Sign out</button>
-          </div>
-        ) : (
-          <div className="account-panel__forms">
-            <form onSubmit={onSignup}>
-              <h3>Create account</h3>
-              <label>
-                Email
-                <input value={authDraft.email} onChange={(event) => patchAuth({ email: event.target.value })} placeholder="you@example.com" />
-              </label>
-              <label>
-                Password
-                <input type="password" value={authDraft.password} onChange={(event) => patchAuth({ password: event.target.value })} placeholder="10+ characters" />
-              </label>
-              <label>
-                Display name
-                <input value={authDraft.displayName} onChange={(event) => patchAuth({ displayName: event.target.value })} placeholder={profile.name} />
-              </label>
-              <button type="submit">Create account</button>
-            </form>
-            <form onSubmit={onLogin}>
-              <h3>Sign in</h3>
-              <label>
-                Email
-                <input value={authDraft.email} onChange={(event) => patchAuth({ email: event.target.value })} placeholder="you@example.com" />
-              </label>
-              <label>
-                Password
-                <input type="password" value={authDraft.password} onChange={(event) => patchAuth({ password: event.target.value })} placeholder="Password" />
-              </label>
-              <button type="submit">Sign in</button>
-            </form>
-          </div>
-        )}
-        {authMessage && <em>{authMessage}</em>}
-      </section>
     </>
+  );
+}
+
+
+function AuthSection({
+  authUser,
+  authDraft,
+  onAuthDraftChange,
+  onSignup,
+  onLogin,
+  onLogout,
+  onContinue,
+  authMessage,
+  garmin,
+  garminDraft,
+  onGarminDraftChange,
+  onGarminConnect,
+  mfaChallenge,
+  mfaCode,
+  onMfaCodeChange,
+  onGarminMfa,
+  garminMessage,
+  garminConnecting,
+  onImportHistory,
+  garminImporting,
+  onDisconnectGarmin,
+}: {
+  authUser: AuthUser | null;
+  authDraft: { email: string; password: string; displayName: string };
+  onAuthDraftChange: (next: { email: string; password: string; displayName: string }) => void;
+  onSignup: (event: FormEvent) => void;
+  onLogin: (event: FormEvent) => void;
+  onLogout: () => void;
+  onContinue: () => void;
+  authMessage: string | null;
+  garmin: import("@/types").GarminStatus | null;
+  garminDraft: { email: string; password: string };
+  onGarminDraftChange: (next: { email: string; password: string }) => void;
+  onGarminConnect: (event: FormEvent) => void;
+  mfaChallenge: string | null;
+  mfaCode: string;
+  onMfaCodeChange: (value: string) => void;
+  onGarminMfa: (event: FormEvent) => void;
+  garminMessage: string | null;
+  garminConnecting: boolean;
+  onImportHistory: () => void;
+  garminImporting: boolean;
+  onDisconnectGarmin: () => void;
+}) {
+  const patchAuth = (patch: Partial<typeof authDraft>) => onAuthDraftChange({ ...authDraft, ...patch });
+  const patchGarmin = (patch: Partial<typeof garminDraft>) => onGarminDraftChange({ ...garminDraft, ...patch });
+  return (
+    <section className="dash-section account-panel card">
+      <div>
+        <div className="card__label">Account foundation</div>
+        <h2>{authUser ? "Signed in account." : "Create or connect a Forge account."}</h2>
+        <p>
+          This step creates the user record first. Once signed in, Garmin data and profile values can be linked to that account.
+        </p>
+      </div>
+      {authUser ? (
+        <div className="account-panel__session">
+          <span>Signed in as</span>
+          <strong>{authUser.display_name}</strong>
+          <small>{authUser.email}</small>
+          {garmin?.configured ? (
+            <div className="account-panel__connection">
+              <strong>Garmin connected</strong>
+              <small>{garmin.account ?? "This Garmin account"} · tokens are encrypted on the server.</small>
+              <button type="button" onClick={onImportHistory} disabled={garminImporting}>
+                {garminImporting ? "Importing history…" : "Import 365-day history"}
+              </button>
+              <button type="button" onClick={onDisconnectGarmin} disabled={garminConnecting}>
+                Disconnect Garmin
+              </button>
+            </div>
+          ) : mfaChallenge ? (
+            <form className="account-panel__connection" onSubmit={onGarminMfa}>
+              <strong>Enter Garmin verification code</strong>
+              <small>Garmin requested an extra verification step. This code expires shortly and is never stored.</small>
+              <label>
+                Verification code
+                <input inputMode="numeric" autoComplete="one-time-code" value={mfaCode} onChange={(event) => onMfaCodeChange(event.target.value)} placeholder="123456" />
+              </label>
+              <button type="submit" disabled={garminConnecting || !mfaCode.trim()}>{garminConnecting ? "Verifying…" : "Verify Garmin code"}</button>
+            </form>
+          ) : (
+            <form className="account-panel__connection" onSubmit={onGarminConnect}>
+              <strong>Connect Garmin</strong>
+              <small>Forge uses these details once to establish a Garmin session. Your Garmin password is not stored.</small>
+              <label>
+                Garmin email
+                <input type="email" autoComplete="username" value={garminDraft.email} onChange={(event) => patchGarmin({ email: event.target.value })} placeholder="you@example.com" />
+              </label>
+              <label>
+                Garmin password
+                <input type="password" autoComplete="current-password" value={garminDraft.password} onChange={(event) => patchGarmin({ password: event.target.value })} placeholder="Garmin password" />
+              </label>
+              <button type="submit" disabled={garminConnecting || !garminDraft.email || !garminDraft.password}>{garminConnecting ? "Connecting…" : "Connect Garmin"}</button>
+            </form>
+          )}
+          {garminMessage && <em>{garminMessage}</em>}
+          <button type="button" onClick={onContinue}>Continue to dashboard</button>
+          <button type="button" onClick={onLogout}>Sign out</button>
+        </div>
+      ) : (
+        <div className="account-panel__forms">
+          <form onSubmit={onSignup}>
+            <h3>Create account</h3>
+            <label>
+              Email
+              <input value={authDraft.email} onChange={(event) => patchAuth({ email: event.target.value })} placeholder="you@example.com" />
+            </label>
+            <label>
+              Password
+              <input type="password" value={authDraft.password} onChange={(event) => patchAuth({ password: event.target.value })} placeholder="12+ characters" />
+            </label>
+            <label>
+              Display name
+              <input value={authDraft.displayName} onChange={(event) => patchAuth({ displayName: event.target.value })} placeholder="Forge Athlete" />
+            </label>
+            <button type="submit">Create account</button>
+          </form>
+          <form onSubmit={onLogin}>
+            <h3>Sign in</h3>
+            <label>
+              Email
+              <input value={authDraft.email} onChange={(event) => patchAuth({ email: event.target.value })} placeholder="you@example.com" />
+            </label>
+            <label>
+              Password
+              <input type="password" value={authDraft.password} onChange={(event) => patchAuth({ password: event.target.value })} placeholder="Password" />
+            </label>
+            <button type="submit">Sign in</button>
+          </form>
+        </div>
+      )}
+      {authMessage && <em>{authMessage}</em>}
+    </section>
   );
 }
 
@@ -1175,7 +1663,7 @@ function focusMetrics(dashboard: Dashboard | null, special: Record<string, Speci
     focusMetric("body_battery", "Body Battery", m?.body_battery, "%", scoreTone(m?.body_battery), "Body Battery reflects available reserve.", "Keep the day light when reserve is low."),
     specialFocusMetric("training_gate", "readiness", special.training_gate, "Training Gate", "The gate turns physiology into an intensity decision.", "Follow the gate before choosing workout intensity."),
     specialFocusMetric("physiological_anomaly_load", "hrv", special.physiological_anomaly_load, "Physiology Stability", "This flags unusual multi-signal physiology.", "Inspect the top drivers before training hard."),
-    specialFocusMetric("sleep_regularity", "sleep_score", special.sleep_regularity, "Sleep Regularity", "Regular timing improves sleep reliability.", "Keep bedtime and wake time inside a tighter window."),
+    specialFocusMetric("sleep_regularity", "sleep_regularity", special.sleep_regularity, "Sleep Regularity", "Regular timing improves sleep reliability.", "Keep bedtime and wake time inside a tighter window."),
     specialFocusMetric("resilience_ratio", "recovery", special.resilience_ratio, "Resilience Ratio", "This shows how recovery responds after strain.", "Space hard sessions if recovery falls after load."),
   ].filter((item) => item.tone !== "neutral" || item.value !== "No data");
 }
@@ -1405,9 +1893,9 @@ function parseOptionalNumber(value: string) {
 
 function syncFreshness(hours: number | null | undefined) {
   if (hours === null || hours === undefined) return "";
-  if (hours < 0.2) return " · just synced";
-  if (hours < 1) return " · synced under 1h ago";
-  return ` · synced ${hours.toFixed(hours < 10 ? 1 : 0)}h ago`;
+  if (hours < 0.2) return " - just synced";
+  if (hours < 1) return " - synced under 1h ago";
+  return ` - synced ${hours.toFixed(hours < 10 ? 1 : 0)}h ago`;
 }
 
 function labelForMetric(metric: string) {
@@ -1455,13 +1943,62 @@ function specialSummary(metric: SpecialMetric | undefined, fallback: string) {
   return metric?.summary || fallback;
 }
 
-function showMetric(filter: MetricFilter, tone: FocusMetric["tone"] | null) {
+function showMetric(filter: MetricFilter, tone: FocusMetric["tone"] | null, metric: string, sustainedWatchMetrics: Set<string>) {
   if (filter === "all") return true;
   if (filter === "missing") return tone === null || tone === "neutral";
-  if (filter === "good") return tone === "good";
-  if (filter === "watch") return tone === "warn" || tone === "low";
-  if (filter === "poor") return tone === "bad";
+  // These filters are deliberately exclusive. Watch means a pattern that has
+  // persisted across recent readings; Poor means an actionable current value
+  // that has not yet earned that sustained-pattern label.
+  const isSustainedWatch = sustainedWatchMetrics.has(metric);
+  if (filter === "watch") return sustainedWatchMetrics.has(metric);
+  if (filter === "poor") return tone === "bad" && !isSustainedWatch;
+  if (filter === "good") return tone === "good" && !isSustainedWatch;
   return true;
+}
+
+type Pattern = InsightsPayload["patterns"][number];
+
+function isSleepPattern(pattern: Pattern) {
+  const id = pattern.id ?? "";
+  return pattern.metric.includes("sleep") || /sleep|bedtime|wake|restorative|deep|rem|jetlag|architecture/i.test(id + pattern.title);
+}
+
+function isFitnessPattern(pattern: Pattern) {
+  const id = pattern.id ?? "";
+  return /workout|training|strain|intensity|exercise|load/i.test(id + pattern.title) || pattern.metric === "strain";
+}
+
+function isBiologyPattern(pattern: Pattern) {
+  const id = pattern.id ?? "";
+  return /stress|recovery|hrv|rhr|respiration|spo2|physiology/i.test(id + pattern.title) || ["stress", "hrv", "rhr", "recovery"].includes(pattern.metric);
+}
+
+function PatternPanel({ title, subtitle, patterns, onDrill }: {
+  title: string;
+  subtitle: string;
+  patterns: Pattern[];
+  onDrill: (key: string, label: string, color: string, unit: string) => void;
+}) {
+  return (
+    <section className="dash-section dash-intel">
+      <div className="dash-intel__panel card">
+        <div className="dash-intel__head">
+          <div>
+            <div className="card__label">{title}</div>
+            <div className="dash-intel__sub">{subtitle}</div>
+          </div>
+        </div>
+        <div className="dash-intel__list">
+          {patterns.length ? patterns.map((pattern) => (
+            <button key={pattern.id ?? pattern.title} className="dash-intel__item" onClick={() => onDrill(pattern.metric, labelForMetric(pattern.metric), colorForMetric(pattern.metric), unitForMetric(pattern.metric))}>
+              <strong>{pattern.title}</strong>
+              <span>{pattern.summary}</span>
+            </button>
+          )) : <div className="dash-intel__item"><strong>More history needed</strong><span>Forge will surface confirmed relationships here once enough matched data is available.</span></div>}
+        </div>
+      </div>
+    </section>
+  );
 }
 
 function formatFocusValue(value: number) {
@@ -1491,4 +2028,31 @@ function shiftDate(iso: string, days: number) {
   const d = new Date(`${iso}T00:00:00`);
   d.setDate(d.getDate() + days);
   return d.toISOString().slice(0, 10);
+}
+
+function roundOne(value: number) {
+  return Math.round(value * 10) / 10;
+}
+
+function ageStatus(delta: number | null) {
+  if (delta === null) return null;
+  if (delta <= -5) return "Excellent";
+  if (delta <= -1) return "Good";
+  if (delta <= 2) return "Fair";
+  return "Needs Work";
+}
+
+function specialMetricTarget(metric: string) {
+  const map: Record<string, { key: string; label: string; color: string; unit: string }> = {
+    sleep_regularity: { key: "sleep_regularity", label: "Sleep Regularity", color: "#8F7CFF", unit: "%" },
+    social_jetlag: { key: "social_jetlag", label: "Social Jetlag", color: "#8F7CFF", unit: "h" },
+    sleep_architecture_confidence: { key: "sleep_architecture_confidence", label: "Sleep Architecture", color: "#8F7CFF", unit: "%" },
+    respiratory_stability_sleep: { key: "respiratory_stability_sleep", label: "Respiratory Stability", color: "#62E6D0", unit: "%" },
+    physiological_anomaly_load: { key: "hrv", label: "HRV", color: "#62E6D0", unit: "ms" },
+    training_gate: { key: "readiness", label: "Readiness", color: "#62E6D0", unit: "" },
+    recovery_half_life: { key: "recovery", label: "Recovery", color: "#6BE3A4", unit: "" },
+    resilience_ratio: { key: "recovery", label: "Recovery", color: "#6BE3A4", unit: "" },
+    training_monotony: { key: "strain", label: "Strain", color: "#FF9B5F", unit: "" },
+  };
+  return map[metric] ?? { key: metric, label: metric.split("_").map((part) => part[0]?.toUpperCase() + part.slice(1)).join(" "), color: "#6BE3A4", unit: "" };
 }

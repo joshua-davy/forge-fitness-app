@@ -13,6 +13,7 @@ from statistics import mean, pstdev
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.account import Workout
 from app.models.health import HealthSnapshot
 from app.services.profile import actual_age_years
 
@@ -73,19 +74,25 @@ METRIC_SPECS: dict[str, MetricSpec] = {
 RANGE_DAYS: dict[str, int | None] = {"7d": 7, "30d": 30, "90d": 90, "6m": 180, "1y": 365, "all": None}
 
 
-def range_snaps(db: Session, end: date, range_key: str) -> list[HealthSnapshot]:
+def range_snaps(db: Session, user_id: int, end: date, range_key: str) -> list[HealthSnapshot]:
     days = RANGE_DAYS.get(range_key, 30)
     if days is None:
         return list(
             db.execute(
-                select(HealthSnapshot).order_by(HealthSnapshot.date.asc())
+                select(HealthSnapshot)
+                .where(HealthSnapshot.user_id == user_id)
+                .order_by(HealthSnapshot.date.asc())
             ).scalars().all()
         )
     start = end - timedelta(days=days - 1)
     return list(
         db.execute(
             select(HealthSnapshot)
-            .where(HealthSnapshot.date >= start, HealthSnapshot.date <= end)
+            .where(
+                HealthSnapshot.user_id == user_id,
+                HealthSnapshot.date >= start,
+                HealthSnapshot.date <= end,
+            )
             .order_by(HealthSnapshot.date.asc())
         ).scalars().all()
     )
@@ -252,7 +259,17 @@ def metric_flags(metric: str, spec: MetricSpec, series: list[dict], coverage: di
             "date": latest_point["date"] if latest_point else None,
             "severity": "alert",
             "title": f"{spec.label} outside target",
-            "detail": f"Latest value is {latest:g}{spec.unit}; target range is {spec.low:g}-{spec.high:g}{spec.unit}.",
+            "detail": f"Latest {spec.label} is {latest:g}{spec.unit}; target range is {spec.low:g}-{spec.high:g}{spec.unit}.",
+            "metric": metric,
+        })
+    recent = values[-7:]
+    sustained_flags = sum(1 for value in recent if _status_for(spec, value) == "flag")
+    if len(recent) >= 5 and sustained_flags >= 4:
+        flags.append({
+            "date": latest_point["date"] if latest_point else None,
+            "severity": "watch",
+            "title": f"{spec.label} has been outside target repeatedly",
+            "detail": f"{sustained_flags} of the last {len(recent)} readings were outside the target range. This is a sustained pattern, not a one-day fluctuation.",
             "metric": metric,
         })
     return flags[:4]
@@ -310,13 +327,13 @@ def metric_insights(metric: str, spec: MetricSpec, series: list[dict], compariso
     }]
 
 
-def metric_payload(db: Session, metric: str, range_key: str, end: date | None = None) -> dict:
+def metric_payload(db: Session, user_id: int, metric: str, range_key: str, end: date | None = None) -> dict:
     spec = METRIC_SPECS.get(metric)
     if not spec:
         raise KeyError(metric)
     end = end or date.today()
     expected_days = RANGE_DAYS.get(range_key, 30)
-    snaps = range_snaps(db, end, range_key)
+    snaps = range_snaps(db, user_id, end, range_key)
     series = []
     for snap in snaps:
         value = _convert_value(spec, getattr(snap, spec.field, None))
@@ -340,7 +357,7 @@ def metric_payload(db: Session, metric: str, range_key: str, end: date | None = 
         "coverage": coverage,
         "comparison": comparison,
         "status": _status_for(spec, values[-1] if values else None),
-        "explanation": metric_explanation(metric, actual_age_years(db)),
+        "explanation": metric_explanation(metric, actual_age_years(db, user_id)),
         "stats": {
             "min": min(values) if values else None,
             "max": max(values) if values else None,
@@ -355,13 +372,13 @@ def metric_payload(db: Session, metric: str, range_key: str, end: date | None = 
     }
 
 
-def dashboard_insights(db: Session, range_key: str = "90d", end: date | None = None) -> dict:
+def dashboard_insights(db: Session, user_id: int, range_key: str = "90d", end: date | None = None) -> dict:
     end = end or date.today()
     priority_metrics = ["recovery", "sleep_score", "hrv", "rhr", "stress", "strain", "body_battery", "fitness_age", "biological_age"]
     payloads = []
     for metric in priority_metrics:
         try:
-            payloads.append(metric_payload(db, metric, range_key, end))
+            payloads.append(metric_payload(db, user_id, metric, range_key, end))
         except KeyError:
             continue
 
@@ -376,7 +393,7 @@ def dashboard_insights(db: Session, range_key: str = "90d", end: date | None = N
         "generated_at": end.isoformat(),
         "flags": flags[:8],
         "insights": insights[:8],
-        "patterns": behavior_patterns(range_snaps(db, end, range_key)),
+        "patterns": behavior_patterns(db, user_id, range_snaps(db, user_id, end, range_key), end),
     }
 
 
@@ -430,6 +447,113 @@ def best_bedtime_pattern(snaps: list[HealthSnapshot]) -> dict:
         "evidence": [f"{len(best_values)} nights in this window", f"{len(overall_values)} nights analysed"],
         "metric": "sleep_score",
     }
+
+
+def best_wake_time_pattern(snaps: list[HealthSnapshot]) -> dict:
+    buckets: dict[str, list[float]] = {}
+    for snap in snaps:
+        if snap.sleep_score is None:
+            continue
+        hour = _parse_local_hour(snap.sleep_end_local)
+        if hour is not None:
+            buckets.setdefault(_bucket_label(hour), []).append(float(snap.sleep_score))
+    candidates = [(label, values) for label, values in buckets.items() if len(values) >= 3]
+    if not candidates:
+        return {
+            "id": "best_wake_time",
+            "title": "Ideal wake time needs more history",
+            "summary": "Forge needs at least 3 nights in the same 30-minute wake window to identify a reliable wake-time pattern.",
+            "confidence": "low",
+            "evidence": [f"{sum(len(values) for values in buckets.values())} wake-time readings available"],
+            "metric": "sleep_score",
+        }
+    label, values = max(candidates, key=lambda item: mean(item[1]))
+    all_values = [score for group in buckets.values() for score in group]
+    return {
+        "id": "best_wake_time",
+        "title": f"Best sleep scores finish around {label}",
+        "summary": f"Nights ending around {label} average {mean(values):.0f} sleep score, {mean(values) - mean(all_values):+.0f} points versus your range average.",
+        "confidence": "high" if len(values) >= 8 and len(all_values) >= 30 else "medium",
+        "evidence": [f"{len(values)} nights in this window", f"{len(all_values)} nights analysed"],
+        "metric": "sleep_score",
+    }
+
+
+def workout_sleep_patterns(db: Session, user_id: int, snaps: list[HealthSnapshot], end: date) -> list[dict]:
+    """Relate persisted workout timing/intensity to the following night's sleep.
+
+    This intentionally reports associations, not causes. At least three matched
+    sessions are required before a pattern is surfaced as actionable.
+    """
+    if not snaps:
+        return []
+    start = min(s.date for s in snaps)
+    workouts = list(db.execute(
+        select(Workout)
+        .where(Workout.user_id == user_id, Workout.activity_date >= start, Workout.activity_date <= end)
+        .order_by(Workout.activity_date.asc())
+    ).scalars().all())
+    by_date = {snap.date: snap for snap in snaps}
+    matched: list[tuple[Workout, HealthSnapshot]] = []
+    for workout in workouts:
+        following_sleep = by_date.get(workout.activity_date + timedelta(days=1)) or by_date.get(workout.activity_date)
+        if following_sleep and following_sleep.sleep_score is not None:
+            matched.append((workout, following_sleep))
+    if len(matched) < 6:
+        return [{
+            "id": "workout_sleep_timing",
+            "title": "Workout-to-sleep patterns are calibrating",
+            "summary": "Forge needs at least 6 workouts with a following sleep score before it can identify timing or intensity patterns.",
+            "confidence": "low",
+            "evidence": [f"{len(matched)} matched workouts available"],
+            "metric": "sleep_score",
+        }]
+
+    patterns: list[dict] = []
+    time_buckets: dict[str, list[HealthSnapshot]] = {}
+    for workout, sleep in matched:
+        hour = _parse_local_hour(workout.start_local)
+        if hour is not None:
+            label = f"{int(hour // 2 * 2):02d}:00-{int(hour // 2 * 2 + 2):02d}:00"
+            time_buckets.setdefault(label, []).append(sleep)
+    viable = [(label, sleeps) for label, sleeps in time_buckets.items() if len(sleeps) >= 3]
+    if viable:
+        label, sleeps = max(viable, key=lambda item: mean(float(s.sleep_score) for s in item[1]))
+        all_scores = [float(sleep.sleep_score) for _, sleep in matched]
+        deep_values = [float(s.sleep_deep_minutes) for s in sleeps if s.sleep_deep_minutes is not None]
+        overall_deep = [float(sleep.sleep_deep_minutes) for _, sleep in matched if sleep.sleep_deep_minutes is not None]
+        deep_copy = f" Deep sleep averages {mean(deep_values) / 60:.1f}h" if deep_values else ""
+        if deep_values and overall_deep:
+            deep_copy += f", {mean(deep_values) - mean(overall_deep):+.0f} minutes versus your workout-night average."
+        else:
+            deep_copy += "."
+        patterns.append({
+            "id": "workout_sleep_timing",
+            "title": f"Your strongest sleep follows workouts around {label}",
+            "summary": f"Across {len(sleeps)} matched sessions, following sleep averages {mean(float(s.sleep_score) for s in sleeps):.0f}, {mean(float(s.sleep_score) for s in sleeps) - mean(all_scores):+.0f} versus your workout-night average.{deep_copy}",
+            "confidence": "high" if len(sleeps) >= 8 else "medium",
+            "evidence": [f"{len(sleeps)} sessions in this time window", f"{len(matched)} matched workouts analysed"],
+            "metric": "sleep_score",
+        })
+
+    hr_matched = [(workout, sleep) for workout, sleep in matched if workout.average_hr is not None]
+    if len(hr_matched) >= 6:
+        threshold = sorted(float(workout.average_hr) for workout, _ in hr_matched)[len(hr_matched) * 2 // 3]
+        high = [sleep for workout, sleep in hr_matched if float(workout.average_hr) >= threshold]
+        low = [sleep for workout, sleep in hr_matched if float(workout.average_hr) < threshold]
+        if len(high) >= 3 and len(low) >= 3:
+            high_score = mean(float(s.sleep_score) for s in high)
+            low_score = mean(float(s.sleep_score) for s in low)
+            direction = "lower" if high_score < low_score else "higher"
+            patterns.append({
+                "id": "workout_intensity_sleep",
+                "title": f"Higher-intensity sessions are followed by {direction} sleep scores",
+                "summary": f"Sessions averaging at least {threshold:.0f} bpm are followed by {high_score:.0f} sleep score versus {low_score:.0f} after lower-HR sessions. This is an association across {len(hr_matched)} matched workouts.",
+                "confidence": "high" if len(hr_matched) >= 20 else "medium",
+                "evidence": [f"{len(high)} higher-HR sessions", f"{len(low)} lower-HR sessions"],
+                "metric": "sleep_score",
+            })
+    return patterns
 
 
 def training_recovery_pattern(snaps: list[HealthSnapshot]) -> dict:
@@ -662,22 +786,24 @@ def bedtime_consistency_pattern(snaps: list[HealthSnapshot]) -> dict:
     }
 
 
-def behavior_patterns(snaps: list[HealthSnapshot]) -> list[dict]:
+def behavior_patterns(db: Session, user_id: int, snaps: list[HealthSnapshot], end: date) -> list[dict]:
     """Deterministic pattern cards. AI may narrate these, but does not invent them."""
     return [
         best_bedtime_pattern(snaps),
+        best_wake_time_pattern(snaps),
         sleep_duration_score_pattern(snaps),
         sleep_debt_recovery_pattern(snaps),
         sleep_stage_score_pattern(snaps),
         bedtime_consistency_pattern(snaps),
         training_recovery_pattern(snaps),
         stress_recovery_pattern(snaps),
+        *workout_sleep_patterns(db, user_id, snaps, end),
     ]
 
 
-def correlations(db: Session, metric: str, range_key: str = "90d", end: date | None = None) -> list[dict]:
+def correlations(db: Session, user_id: int, metric: str, range_key: str = "90d", end: date | None = None) -> list[dict]:
     """Lightweight Pearson correlations against other tracked metrics."""
-    base = metric_payload(db, metric, range_key, end)["series"]
+    base = metric_payload(db, user_id, metric, range_key, end)["series"]
     by_date = {point["date"]: point["value"] for point in base}
     if len(by_date) < 10:
         return []
@@ -685,7 +811,7 @@ def correlations(db: Session, metric: str, range_key: str = "90d", end: date | N
     for other in ("sleep_score", "hrv", "rhr", "stress", "strain", "body_battery", "recovery"):
         if other == metric:
             continue
-        other_series = metric_payload(db, other, range_key, end)["series"]
+        other_series = metric_payload(db, user_id, other, range_key, end)["series"]
         pairs = [(by_date[p["date"]], p["value"]) for p in other_series if p["date"] in by_date]
         if len(pairs) < 10:
             continue

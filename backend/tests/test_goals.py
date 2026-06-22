@@ -24,6 +24,7 @@ from app.services import goals as svc  # noqa: E402
 
 
 TZ = ZoneInfo("Europe/London")
+USER_ID = 1
 
 
 @pytest.fixture(autouse=True)
@@ -81,70 +82,70 @@ def test_day_progress_sleeping():
 
 
 def test_create_and_list_today(db):
-    g = svc.create(db, GoalCreate(text="Train legs"))
+    g = svc.create(db, USER_ID, GoalCreate(text="Train legs"))
     assert g.id and g.text == "Train legs"
     assert not g.done
-    assert len(svc.list_today(db)) == 1
+    assert len(svc.list_today(db, USER_ID)) == 1
 
 
 def test_complete_goal_sets_done_at(db):
-    g = svc.create(db, GoalCreate(text="Walk dog"))
-    updated = svc.update(db, g.id, GoalUpdate(done=True))
+    g = svc.create(db, USER_ID, GoalCreate(text="Walk dog"))
+    updated = svc.update(db, USER_ID, g.id, GoalUpdate(done=True))
     assert updated.done is True
     assert updated.done_at is not None
 
 
 def test_reorder(db):
-    a = svc.create(db, GoalCreate(text="A"))
-    b = svc.create(db, GoalCreate(text="B"))
-    c = svc.create(db, GoalCreate(text="C"))
-    svc.reorder(db, [ReorderItem(id=c.id, sort_order=0),
+    a = svc.create(db, USER_ID, GoalCreate(text="A"))
+    b = svc.create(db, USER_ID, GoalCreate(text="B"))
+    c = svc.create(db, USER_ID, GoalCreate(text="C"))
+    svc.reorder(db, USER_ID, [ReorderItem(id=c.id, sort_order=0),
                      ReorderItem(id=a.id, sort_order=1),
                      ReorderItem(id=b.id, sort_order=2)])
-    ordered = svc.list_today(db)
+    ordered = svc.list_today(db, USER_ID)
     assert [g.text for g in ordered] == ["C", "A", "B"]
 
 
 def test_streak_increments_when_all_complete(db):
     today = get_active_date()
-    a = svc.create(db, GoalCreate(text="A"))
-    b = svc.create(db, GoalCreate(text="B"))
-    svc.update(db, a.id, GoalUpdate(done=True))
-    svc.update(db, b.id, GoalUpdate(done=True))
-    s = svc.get_streak(db)
+    a = svc.create(db, USER_ID, GoalCreate(text="A"))
+    b = svc.create(db, USER_ID, GoalCreate(text="B"))
+    svc.update(db, USER_ID, a.id, GoalUpdate(done=True))
+    svc.update(db, USER_ID, b.id, GoalUpdate(done=True))
+    s = svc.get_streak(db, USER_ID)
     assert s.count == 1
     assert s.last_processed_date == today
 
 
 def test_streak_does_not_double_count(db):
-    a = svc.create(db, GoalCreate(text="A"))
-    svc.update(db, a.id, GoalUpdate(done=True))
-    svc.update(db, a.id, GoalUpdate(text="A renamed"))
-    assert svc.get_streak(db).count == 1
+    a = svc.create(db, USER_ID, GoalCreate(text="A"))
+    svc.update(db, USER_ID, a.id, GoalUpdate(done=True))
+    svc.update(db, USER_ID, a.id, GoalUpdate(text="A renamed"))
+    assert svc.get_streak(db, USER_ID).count == 1
 
 
 def test_streak_zero_goal_day_does_not_advance(db):
-    assert svc.get_streak(db).count == 0
+    assert svc.get_streak(db, USER_ID).count == 0
 
 
 def test_push_remaining_moves_only_unfinished(db):
     today = get_active_date()
     tomorrow = get_tomorrow_date()
-    a = svc.create(db, GoalCreate(text="Done"))
-    svc.create(db, GoalCreate(text="Pending 1"))
-    svc.create(db, GoalCreate(text="Pending 2"))
-    svc.update(db, a.id, GoalUpdate(done=True))
-    moved = svc.push_remaining(db, today, tomorrow)
+    a = svc.create(db, USER_ID, GoalCreate(text="Done"))
+    svc.create(db, USER_ID, GoalCreate(text="Pending 1"))
+    svc.create(db, USER_ID, GoalCreate(text="Pending 2"))
+    svc.update(db, USER_ID, a.id, GoalUpdate(done=True))
+    moved = svc.push_remaining(db, USER_ID, today, tomorrow)
     assert moved == 2
-    assert len(svc.list_for_date(db, today)) == 1
-    assert len(svc.list_for_date(db, tomorrow)) == 2
+    assert len(svc.list_for_date(db, USER_ID, today)) == 1
+    assert len(svc.list_for_date(db, USER_ID, tomorrow)) == 2
 
 
 def test_completion_rate(db):
-    a = svc.create(db, GoalCreate(text="A"))
-    svc.create(db, GoalCreate(text="B"))
-    svc.update(db, a.id, GoalUpdate(done=True))
-    stats = svc.daily_completion_stats(db, get_active_date())
+    a = svc.create(db, USER_ID, GoalCreate(text="A"))
+    svc.create(db, USER_ID, GoalCreate(text="B"))
+    svc.update(db, USER_ID, a.id, GoalUpdate(done=True))
+    stats = svc.daily_completion_stats(db, USER_ID, get_active_date())
     assert stats["total"] == 2 and stats["completed"] == 1
     assert stats["completion_rate"] == 0.5
 
@@ -152,22 +153,25 @@ def test_completion_rate(db):
 def test_api_smoke_full_flow():
     client = TestClient(app)
     assert client.get("/healthz").status_code == 200
+    auth = client.post("/api/auth/signup", json={"email": "goals@example.com", "password": "correct-horse-99", "display_name": "Goals"})
+    assert auth.status_code == 201
+    headers = {"Authorization": f"Bearer {auth.json()['token']}"}
 
-    r = client.post("/api/goals", json={"text": "Run 5k"})
+    r = client.post("/api/goals", json={"text": "Run 5k"}, headers=headers)
     assert r.status_code == 201
     gid = r.json()["id"]
 
-    assert len(client.get("/api/goals/today").json()) == 1
+    assert len(client.get("/api/goals/today", headers=headers).json()) == 1
 
-    r = client.patch(f"/api/goals/{gid}", json={"done": True})
+    r = client.patch(f"/api/goals/{gid}", json={"done": True}, headers=headers)
     assert r.json()["done"] is True
-    assert client.get("/api/goals/streak").json()["count"] == 1
+    assert client.get("/api/goals/streak", headers=headers).json()["count"] == 1
 
-    body = client.get("/api/dashboard/today").json()
+    body = client.get("/api/dashboard/today", headers=headers).json()
     assert body["goals_total"] == 1 and body["goals_completed"] == 1
     assert len(body["rings"]) == 3
 
-    coach = client.get("/api/coach/today").json()
+    coach = client.get("/api/coach/today", headers=headers).json()
     assert "observations" in coach or "headline" in coach
 
 
@@ -176,7 +180,16 @@ def test_polish_degrades_without_key(monkeypatch):
     from app.core import config
     config.get_settings.cache_clear()
     client = TestClient(app)
-    r = client.post("/api/goals/polish", json={"text": "do gym later"})
+    auth = client.post(
+        "/api/auth/signup",
+        json={"email": "polish@example.com", "password": "correct-horse-99", "display_name": "Polish"},
+    )
+    assert auth.status_code == 201
+    r = client.post(
+        "/api/goals/polish",
+        json={"text": "do gym later"},
+        headers={"Authorization": f"Bearer {auth.json()['token']}"},
+    )
     assert r.status_code == 200
     body = r.json()
     assert body["used_ai"] is False
