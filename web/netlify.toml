@@ -4,16 +4,7 @@
 
 [build.environment]
   NODE_VERSION = "20"
-  # Set VITE_API_URL in Netlify UI → Site → Environment variables
-  # e.g. https://forge-backend.fly.dev or https://forge-api.railway.app
 
-[[redirects]]
-  from = "/api/*"
-  to = ":VITE_API_URL/api/:splat"
-  status = 200
-  force = true
-
-# SPA fallback
 [[redirects]]
   from = "/*"
   to = "/index.html"
