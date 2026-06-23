@@ -4,9 +4,10 @@ import "./HealthRings.css";
 
 interface Props {
   rings: Ring[];
+  onSelect?: (ring: Ring) => void;
 }
 
-function HealthRing({ ring }: { ring: Ring }) {
+function HealthRing({ ring, onSelect }: { ring: Ring; onSelect?: (ring: Ring) => void }) {
   const size = 110;
   const stroke = 9;
   const r = (size - stroke) / 2;
@@ -18,7 +19,7 @@ function HealthRing({ ring }: { ring: Ring }) {
   const colorVar = ringColor(ring);
 
   return (
-    <div className="hring">
+    <div className={`hring ${onSelect ? "hring--clickable" : ""}`} onClick={() => onSelect?.(ring)} role={onSelect ? "button" : undefined} tabIndex={onSelect ? 0 : undefined} onKeyDown={(event) => { if (onSelect && (event.key === "Enter" || event.key === " ")) onSelect(ring); }}>
       <div className="hring__visual" style={{ width: size, height: size }}>
         <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
           <circle
@@ -55,13 +56,13 @@ function HealthRing({ ring }: { ring: Ring }) {
   );
 }
 
-export function HealthRings({ rings }: Props) {
+export function HealthRings({ rings, onSelect }: Props) {
   return (
     <div className="hrings card">
       <div className="card__label">Vitals</div>
       <div className="hrings__row">
         {rings.map((r) => (
-          <HealthRing key={r.label} ring={r} />
+          <HealthRing key={r.label} ring={r} onSelect={onSelect} />
         ))}
       </div>
     </div>

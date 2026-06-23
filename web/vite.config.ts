@@ -3,9 +3,12 @@ import react from "@vitejs/plugin-react";
 import path from "node:path";
 
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, process.cwd(), "");
+  // Anchor Vite to this project even when the workspace is accessed through a junction.
+  const root = path.resolve(__dirname);
+  const env = loadEnv(mode, root, "");
   const apiTarget = env.VITE_API_URL || "http://127.0.0.1:8001";
   return {
+    root,
     plugins: [react()],
     resolve: {
       alias: {

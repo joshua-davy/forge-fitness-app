@@ -13,6 +13,17 @@
   align-items: center;
   gap: 10px;
 }
+.hring--clickable {
+  cursor: pointer;
+  border-radius: 14px;
+  outline: none;
+  transition: transform 180ms ease, background 180ms ease;
+}
+.hring--clickable:hover,
+.hring--clickable:focus-visible {
+  transform: translateY(-2px);
+  background: rgba(255, 255, 255, 0.035);
+}
 
 .hring__visual { position: relative; }
 

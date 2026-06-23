@@ -9,6 +9,7 @@ import { MetricChart } from "@/components/health/MetricChart";
 import { HealthRings } from "@/components/health/HealthRings";
 import { RangeMarkerCard } from "@/components/health/RangeMarkerCard";
 import { Header } from "@/components/layout/Header";
+import { Area, AreaChart, CartesianGrid, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api } from "@/lib/api";
 import { useCoach, useDashboard, useDayProgress, useGarminStatus, useGoals, useInsights, usePlanning } from "@/hooks/data";
 import type { AuthUser, CoachPayload, Dashboard, FitnessPredictions, HistoryImportJob, InsightsPayload, MetricSeries, NutritionPlan, PlanningSettings, SleepSchedule, SpecialMetric } from "@/types";
@@ -49,6 +50,7 @@ export function DashboardScreen() {
   const [garminImporting, setGarminImporting] = useState(false);
   const [historyImport, setHistoryImport] = useState<HistoryImportJob | null>(null);
   const [section, setSection] = useState<AppSection>("start");
+  const [demoMode, setDemoMode] = useState(false);
   const [ageWindow, setAgeWindow] = useState<AgeWindow>("7d");
   const [metricFilter, setMetricFilter] = useState<MetricFilter>("all");
   const [fitnessSeries, setFitnessSeries] = useState<Record<string, MetricSeries | null>>({});
@@ -356,6 +358,7 @@ export function DashboardScreen() {
   };
 
   if (section === "start") {
+    if (demoMode) return <DemoDashboard onExit={() => setDemoMode(false)} />;
     return (
       <main className="app app--entry">
         {authUser ? (
@@ -367,7 +370,7 @@ export function DashboardScreen() {
             </div>
             <div className="entry-hero__pill">Your data stays attached to this Forge account.</div>
           </section>
-        ) : <WelcomeHero />}
+        ) : <WelcomeHero onDemo={() => setDemoMode(true)} />}
         <AuthSection
           authUser={authUser}
           authDraft={authDraft}
@@ -877,7 +880,7 @@ const WELCOME_LINES = [
   "Building a stronger baseline.",
 ];
 
-function WelcomeHero() {
+function WelcomeHero({ onDemo }: { onDemo: () => void }) {
   const [lineIndex, setLineIndex] = useState(0);
   const [visible, setVisible] = useState("");
   const [deleting, setDeleting] = useState(false);
@@ -905,8 +908,159 @@ function WelcomeHero() {
       <div className="welcome-hero__word">FORGE</div>
       <p className="welcome-hero__type">{visible}<span aria-hidden="true">|</span></p>
       <p className="welcome-hero__copy">Your private health command centre. Start with an account, then connect the data that makes it personal.</p>
+      <button type="button" className="welcome-hero__demo" onClick={onDemo}>See demo dashboard</button>
     </section>
   );
+}
+
+const DEMO_RINGS = [
+  { label: "Recovery", value: 82, target: 100, color: "--ring-recovery" },
+  { label: "Readiness", value: 76, target: 100, color: "--ring-readiness" },
+  { label: "Strain", value: 10, target: 14, color: "--ring-strain" },
+];
+
+const DEMO_DRIVERS = [
+  { name: "VO2 Max", value: 48, unit: "ml/kg/min", adjustment_years: -2.1, direction: "helping" as const },
+  { name: "Resting HR", value: 54, unit: "bpm", adjustment_years: -1.2, direction: "helping" as const },
+  { name: "Sleep", value: 84, unit: "%", adjustment_years: -0.9, direction: "helping" as const },
+];
+
+type DemoMetricDetail = {
+  key: string;
+  label: string;
+  value: number;
+  unit: string;
+  color: string;
+  normalLow: number;
+  normalHigh: number;
+  status: string;
+  interpretation: string;
+  trend: number;
+  variation: number;
+};
+
+const DEMO_METRICS: Record<string, DemoMetricDetail> = {
+  recovery: { key: "recovery", label: "Recovery", value: 82, unit: "/100", color: "#6BE3A4", normalLow: 70, normalHigh: 100, status: "High", interpretation: "Sleep, overnight HRV, and resting heart rate support normal training today.", trend: 8, variation: 5 },
+  readiness: { key: "readiness", label: "Readiness", value: 76, unit: "/100", color: "#62E6D0", normalLow: 65, normalHigh: 100, status: "Ready", interpretation: "Current recovery and recent load leave room for a productive aerobic session.", trend: 5, variation: 6 },
+  strain: { key: "strain", label: "Strain", value: 10, unit: "/14", color: "#FF9B5F", normalLow: 7, normalHigh: 12, status: "In range", interpretation: "Training load is progressing within the current target range.", trend: 1.2, variation: 1.4 },
+  hrv: { key: "hrv", label: "HRV", value: 61, unit: "ms", color: "#62E6D0", normalLow: 48, normalHigh: 74, status: "Normal", interpretation: "Overnight HRV is holding near the established baseline with no acute suppression.", trend: 3, variation: 4.5 },
+  rhr: { key: "rhr", label: "Resting HR", value: 54, unit: "bpm", color: "#FF6B6B", normalLow: 45, normalHigh: 62, status: "Normal", interpretation: "Resting heart rate is below the recent average, which supports the stable recovery signal.", trend: -1.5, variation: 2.2 },
+  sleep_score: { key: "sleep_score", label: "Sleep Score", value: 84, unit: "/100", color: "#8F7CFF", normalLow: 75, normalHigh: 100, status: "Good", interpretation: "Duration, timing, and stage balance have been consistently favourable this month.", trend: 4, variation: 6 },
+  fitness_age: { key: "fitness_age", label: "Fitness Age", value: 29, unit: "yrs", color: "#6BE3A4", normalLow: 18, normalHigh: 34, status: "Excellent", interpretation: "Aerobic capacity and recovery markers place cardiovascular fitness below chronological age.", trend: -0.8, variation: 0.7 },
+  biological_age: { key: "biological_age", label: "Biological Age", value: 31, unit: "yrs", color: "#A7B0FF", normalLow: 18, normalHigh: 34, status: "Good", interpretation: "Sleep, autonomic recovery, and body composition currently support a lower biological-age estimate.", trend: -0.5, variation: 0.8 },
+  vo2max: { key: "vo2max", label: "VO2 Max", value: 48, unit: "ml/kg/min", color: "#FF9B5F", normalLow: 42, normalHigh: 70, status: "High", interpretation: "Aerobic capacity is above the age-adjusted reference range and has improved over the current block.", trend: 1.4, variation: 1.1 },
+  cardio_load: { key: "cardio_load", label: "Cardio Load", value: 118, unit: "", color: "#FF9B5F", normalLow: 70, normalHigh: 170, status: "In range", interpretation: "The short-term training dose remains within a sustainable band relative to recent capacity.", trend: 10, variation: 18 },
+  hr_recovery: { key: "hr_recovery", label: "HR Recovery", value: 36, unit: "bpm", color: "#62E6D0", normalLow: 25, normalHigh: 80, status: "Strong", interpretation: "The one-minute heart-rate drop after harder sessions suggests efficient post-exercise recovery.", trend: 2.5, variation: 3.2 },
+  sleep_debt: { key: "sleep_debt", label: "Sleep Debt", value: 0.4, unit: "h", color: "#8F7CFF", normalLow: 0, normalHigh: 1, status: "Low", interpretation: "Accumulated sleep debt is low enough that it is unlikely to constrain today's training choice.", trend: -0.25, variation: 0.25 },
+  sleep_regularity: { key: "sleep_regularity", label: "Sleep Regularity", value: 87, unit: "%", color: "#8F7CFF", normalLow: 75, normalHigh: 100, status: "Good", interpretation: "Bed and wake timing are stable across the recent history, supporting stronger sleep continuity.", trend: 3, variation: 4.5 },
+};
+
+function DemoDashboard({ onExit }: { onExit: () => void }) {
+  const [tab, setTab] = useState<"home" | "fitness" | "sleep">("home");
+  const [activeMetric, setActiveMetric] = useState<DemoMetricDetail | null>(null);
+  const openMetric = (key: string) => setActiveMetric(DEMO_METRICS[key] ?? null);
+  return (
+    <main className="app demo-dashboard">
+      <header className="demo-dashboard__head">
+        <div><div className="forge-header__eyebrow">INTERACTIVE PRODUCT TOUR</div><h1>FORGE</h1><p>Demo dashboard · simulated health data</p></div>
+        <button type="button" onClick={onExit}>Back to sign in</button>
+      </header>
+      <nav className="dash-floatnav" aria-label="Demo dashboard sections">
+        {(["home", "fitness", "sleep"] as const).map((item) => <button key={item} type="button" className={tab === item ? "dash-floatnav__item dash-floatnav__item--active" : "dash-floatnav__item"} onClick={() => setTab(item)}>{titleCase(item)}</button>)}
+      </nav>
+      <section className="demo-dashboard__notice"><span>Demo mode</span> Values are simulated to show how Forge turns history into decisions. No account, API call, or Garmin connection is used.</section>
+      {activeMetric && <DemoMetricDetailModal metric={activeMetric} onClose={() => setActiveMetric(null)} />}
+      {tab === "home" && <>
+        <section className="dash-section"><HealthRings rings={DEMO_RINGS} onSelect={(ring) => openMetric(ring.label.toLowerCase())} /></section>
+        <section className="dash-section demo-coach card"><div><div className="card__label">Today’s recommendation</div><h2>Recovery supports a productive aerobic day.</h2><p>Sleep is above your recent baseline and strain remains within target. Keep intensity controlled and finish the session before your wind-down window.</p></div><div className="demo-coach__actions"><span>Easy aerobic · 45–60 min</span><span>Wind down by 22:15</span></div></section>
+        <section className="dash-section dash-ages"><AgeCard kind="fitness" age={29} actualAge={34} delta={-5} status="Excellent" drivers={DEMO_DRIVERS} periodLabel="30-day average" onClick={() => openMetric("fitness_age")} /><AgeCard kind="biological" age={31} actualAge={34} delta={-3} status="Good" drivers={DEMO_DRIVERS} periodLabel="30-day average" onClick={() => openMetric("biological_age")} /></section>
+        <section className="dash-section dash-ranges"><RangeMarkerCard label="HRV" value={61} unit="ms" min={15} max={110} normalLow={48} normalHigh={74} mode="range" help="Near baseline with stable overnight recovery." onClick={() => openMetric("hrv")} /><RangeMarkerCard label="Resting HR" value={54} unit="bpm" min={40} max={95} normalLow={45} normalHigh={62} mode="lower" help="Below the 30-day baseline." onClick={() => openMetric("rhr")} /><RangeMarkerCard label="Sleep Score" value={84} min={0} max={100} normalLow={75} normalHigh={100} mode="higher" help="Strong duration, timing, and sleep-stage balance." onClick={() => openMetric("sleep_score")} /></section>
+      </>}
+      {tab === "fitness" && <>
+        <section className="dash-section dash-page-head card"><div><div className="card__label">Fitness cockpit</div><h2>Training load is building without excess fatigue.</h2><p>Explore how Forge combines capacity, load balance, and discipline freshness.</p></div></section>
+        <section className="dash-section dash-ranges"><RangeMarkerCard label="VO2 Max" value={48} unit="ml/kg/min" min={25} max={70} normalLow={42} normalHigh={70} mode="higher" help="Above age-adjusted reference range." onClick={() => openMetric("vo2max")} /><RangeMarkerCard label="Cardio Load" value={118} min={0} max={300} normalLow={70} normalHigh={170} mode="target" help="Within your sustainable load range." onClick={() => openMetric("cardio_load")} /><RangeMarkerCard label="HR Recovery" value={36} unit="bpm" min={0} max={80} normalLow={25} normalHigh={80} mode="higher" help="A strong one-minute post-exercise drop." onClick={() => openMetric("hr_recovery")} /></section>
+        <section className="dash-section planner-card card"><div className="planner-card__head"><div><div className="card__label">Race outlook</div><h2>5K estimate: 23:40–24:20.</h2></div><span className="planner-confidence planner-confidence--medium">Demo estimate</span></div><div className="forecast-scenarios"><div><span>Six-week consistency scenario</span><strong>1–3% faster range</strong><small>Two easy runs plus one quality session, if recovery stays stable.</small></div><div><span>No-training scenario</span><strong>1–4% slower range</strong><small>A conservative planning range, not a prediction.</small></div></div></section>
+      </>}
+      {tab === "sleep" && <>
+        <section className="dash-section dash-page-head card"><div><div className="card__label">Sleep intelligence</div><h2>Your strongest nights begin in a consistent window.</h2><p>Forge makes timing, recovery, and training-sleep relationships visible.</p></div></section>
+        <section className="dash-section"><SleepSchedulePanel data={{ status: "ready", ideal_bedtime: "22:45", ideal_wake_time: "06:50", target_bedtime: "22:50", wind_down_start: "21:50", latest_practical_wake: "07:00", sample_nights: 68, confidence: "high", notes: ["Top-scoring nights cluster around a consistent bedtime and wake time."] }} /></section>
+        <section className="dash-section dash-ranges"><RangeMarkerCard label="Sleep Score" value={84} min={0} max={100} normalLow={75} normalHigh={100} mode="higher" help="Higher than the 30-day average." onClick={() => openMetric("sleep_score")} /><RangeMarkerCard label="Sleep Debt" value={0.4} unit="h" min={0} max={5} normalLow={0} normalHigh={1} mode="lower" help="Low enough to support normal training." onClick={() => openMetric("sleep_debt")} /><RangeMarkerCard label="Sleep Regularity" value={87} unit="%" min={0} max={100} normalLow={75} normalHigh={100} mode="higher" help="Bed and wake timing are stable." onClick={() => openMetric("sleep_regularity")} /></section>
+      </>}
+      <section className="demo-dashboard__cta card"><div><div className="card__label">Make it personal</div><h2>Connect your own history when you are ready.</h2></div><button type="button" onClick={onExit}>Create Forge account</button></section>
+    </main>
+  );
+}
+
+function DemoMetricDetailModal({ metric, onClose }: { metric: DemoMetricDetail; onClose: () => void }) {
+  const [range, setRange] = useState<7 | 30 | 90>(30);
+  const allRows = demoMetricHistory(metric);
+  const rows = allRows.slice(-range);
+  const average = rows.reduce((total, point) => total + point.value, 0) / rows.length;
+  const low = Math.min(...rows.map((point) => point.value));
+  const high = Math.max(...rows.map((point) => point.value));
+  const previous = rows[rows.length - 2]?.value ?? metric.value;
+  const latest = rows[rows.length - 1]?.value ?? metric.value;
+  const delta = latest - previous;
+  const gradientId = `demo-grad-${metric.key}`;
+
+  return (
+    <div className="dash-drill-backdrop" role="presentation" onClick={onClose}>
+      <div className="dash-drill card demo-drill" role="dialog" aria-modal="true" aria-label={`${metric.label} demo detail`} onClick={(event) => event.stopPropagation()}>
+        <div className="dash-drill__head">
+          <div><span className="dash-drill__title">{metric.label}</span><span className="demo-drill__tag">Simulated history</span></div>
+          <button className="dash-drill__close" type="button" aria-label="Close metric detail" onClick={onClose}>×</button>
+        </div>
+        <div className="mchart">
+          <div className="mchart__head">
+            <div><div className="mchart__label">{metric.status}</div><div className="demo-drill__value">{formatDemoValue(latest)}<small>{metric.unit}</small></div></div>
+            <div className="mchart__ranges">
+              {([7, 30, 90] as const).map((days) => <button key={days} type="button" className={`mchart__range ${range === days ? "mchart__range--on" : ""}`} onClick={() => setRange(days)}>{days}D</button>)}
+            </div>
+          </div>
+          <div className="mchart__stats">
+            <span>Latest <strong>{formatDemoValue(latest)}{metric.unit}</strong></span>
+            <span>Average <strong>{formatDemoValue(average)}{metric.unit}</strong></span>
+            <span>Low <strong>{formatDemoValue(low)}{metric.unit}</strong></span>
+            <span>High <strong>{formatDemoValue(high)}{metric.unit}</strong></span>
+            <span className={delta >= 0 ? "mchart__up" : "mchart__down"}>Last day <strong>{delta >= 0 ? "+" : ""}{formatDemoValue(delta)}{metric.unit}</strong></span>
+          </div>
+          <div className="mchart__area">
+            <ResponsiveContainer width="100%" height={260}>
+              <AreaChart data={rows} margin={{ top: 14, right: 12, bottom: 0, left: -8 }}>
+                <defs><linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={metric.color} stopOpacity={0.32} /><stop offset="100%" stopColor={metric.color} stopOpacity={0} /></linearGradient></defs>
+                <CartesianGrid stroke="rgba(255,255,255,0.05)" strokeDasharray="3 3" />
+                <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#76746E", fontFamily: "JetBrains Mono" }} tickFormatter={(value: string) => value.slice(5)} interval="preserveStartEnd" />
+                <YAxis tick={{ fontSize: 10, fill: "#76746E", fontFamily: "JetBrains Mono" }} width={36} />
+                <ReferenceLine y={average} stroke="rgba(255,255,255,0.25)" strokeDasharray="4 4" />
+                <Tooltip contentStyle={{ background: "#08090C", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, fontFamily: "JetBrains Mono", fontSize: 12 }} labelStyle={{ color: "#B8B6B0" }} itemStyle={{ color: metric.color }} formatter={(value: unknown) => [`${formatDemoValue(Number(value))}${metric.unit}`, metric.label]} />
+                <Area type="monotone" dataKey="value" stroke={metric.color} strokeWidth={2} fill={`url(#${gradientId})`} dot={false} activeDot={{ r: 5, fill: metric.color, stroke: "#08090C", strokeWidth: 2 }} />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="demo-drill__interpretation"><strong>What this shows.</strong> {metric.interpretation}</div>
+          <div className="demo-drill__range"><span>Personal range</span><b>{metric.normalLow}–{metric.normalHigh}{metric.unit}</b><em>Values and history in this demo are illustrative only.</em></div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function demoMetricHistory(metric: DemoMetricDetail) {
+  const today = new Date();
+  const seed = metric.key.split("").reduce((total, char) => total + char.charCodeAt(0), 0);
+  return Array.from({ length: 90 }, (_, index) => {
+    const date = new Date(today);
+    date.setDate(today.getDate() - (89 - index));
+    const cycle = Math.sin((index + seed) * 0.47) * metric.variation;
+    const slowerCycle = Math.cos((index + seed) * 0.13) * metric.variation * 0.38;
+    const trajectory = ((index - 89) / 89) * metric.trend;
+    const value = metric.value + cycle + slowerCycle + trajectory;
+    return { date: date.toISOString().slice(0, 10), value: Number(value.toFixed(metric.unit === "h" ? 2 : 1)) };
+  });
+}
+
+function formatDemoValue(value: number) {
+  return Math.abs(value) < 5 && !Number.isInteger(value) ? value.toFixed(1) : Number.isInteger(value) ? String(value) : value.toFixed(1);
 }
 
 function NutritionPlanner({ plan }: { plan: NutritionPlan }) {
